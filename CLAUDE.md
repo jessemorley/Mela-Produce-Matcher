@@ -84,14 +84,11 @@ frontend as the sentinel error string `"cancelled"` rather than a real error.
 events — `status` (free-text progress), `produce` (`{fruit, vegetable, pick,
 featured}`), and `suggestion-line` (each line of the ranked output, parsed
 by `parseSuggestionLine` in `RecipeList.jsx` into rank/title/id/matches/fit).
-Produce items are matched to icons by slugifying the name (`lowercase`,
-spaces → underscores) and loading `/svg/<slug>.svg`; a missing icon just
-fails silently (`onError` hides the tile) rather than showing a broken
-image, since Claude's wording won't always exactly match the ~450 icon
-filenames served from `public/svg/` (copied from the root-level `svg/`
-asset source — edit icons there, not in `public/svg/`, and re-copy;
-`public/` is Vite's static-asset convention, so anything there is served
-byte-for-byte at the same path).
+Produce items render with a colored emoji tile keyed by type (`TYPE_STYLE`
+in `RecipeList.jsx`, Fruit vs Vegetable) rather than per-item icons — Claude's
+produce names come dynamically from the live newsletter, so a fixed
+name→icon lookup would drift out of date; keying on type instead always
+matches, at the cost of visual variety between individual items.
 
 Three-pane layout (`Sidebar` / `RecipeList` / main canvas in `App.jsx`):
 left nav (Harvest Matches / This Week's Produce / Saved Recipes) with live
@@ -105,10 +102,7 @@ scripts/styles/forms/dangerous attributes), toggled in place of the detail
 pane; external links inside it route through `open_url` to the system
 browser rather than navigating the webview.
 
-Dark mode only — no light theme, no `prefers-color-scheme` toggle. SVG tiles
-are near-black source art recolored white via CSS `filter: invert(1)`
-(the `.produce-icon` class in `src/index.css`) on the `<img>` itself, not
-its container, so the container's own background isn't inverted too.
+Dark mode only — no light theme, no `prefers-color-scheme` toggle.
 
 The app window uses a native macOS overlay title bar (`titleBarStyle:
 Overlay`, `hiddenTitle: true` in `tauri.conf.json`) — panes have their own

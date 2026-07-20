@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { Search, Check, Sparkles } from "lucide-react";
 
 const { invoke } = window.__TAURI__.core;
@@ -25,20 +24,21 @@ export function parseSuggestionLine(line) {
   };
 }
 
-function slugify(name) {
-  return name.trim().toLowerCase().replace(/\s+/g, "_");
-}
+// Produce names come dynamically from Claude reading the live newsletter,
+// so they won't reliably match a small hand-picked name→emoji table (the
+// mockup only covered 12 fixed items) — key on type instead, which always
+// matches.
+const TYPE_STYLE = {
+  Fruit: { emoji: "🍎", color: "bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-300" },
+  Vegetable: { emoji: "🥬", color: "bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300" },
+};
 
-function ProduceIcon({ name }) {
-  const [failed, setFailed] = useState(false);
-  if (failed) return null;
+function ProduceIcon({ type }) {
+  const { emoji, color } = TYPE_STYLE[type];
   return (
-    <img
-      src={`/svg/${slugify(name)}.svg`}
-      alt=""
-      className="produce-icon w-5 h-5 shrink-0"
-      onError={() => setFailed(true)}
-    />
+    <span className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-base ${color}`}>
+      {emoji}
+    </span>
   );
 }
 
@@ -120,7 +120,7 @@ function ProduceView({ produce, searchQuery }) {
           key={item.name}
           className="p-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/5 flex items-center space-x-2.5"
         >
-          <ProduceIcon name={item.name} />
+          <ProduceIcon type={item.type} />
           <div>
             <h4 className="text-xs font-bold text-slate-200 flex items-center gap-1">
               {item.name}
