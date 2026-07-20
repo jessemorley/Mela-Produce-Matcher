@@ -1,10 +1,10 @@
 use rusqlite::Connection;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 const FEED_URL: &str = "https://www.harrisfarm.com.au/blogs/daves-market-update.atom";
@@ -14,7 +14,7 @@ const CANCELLED: &str = "cancelled";
 #[derive(Default)]
 struct RunningChild(Mutex<Option<u32>>);
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Recipe {
     id: String,
     title: String,
@@ -93,7 +93,11 @@ fn extract_link_href(entry_xml: &str) -> String {
     val.find('"').map(|end| val[..end].to_string()).unwrap_or_default()
 }
 
-fn fetch_latest_entry(feed_url: &str) -> Result<(String, String, String, String), String> {
+/// Returns (title, stripped text, raw html, link href, atom entry id).
+/// The entry id (not the link) is what we key the produce cache on — it's
+/// the stable per-post identifier Atom guarantees, whereas the link is only
+/// kept around for the "read full article" UI affordance.
+fn fetch_latest_entry(feed_url: &str) -> Result<(String, String, String, String, String), String> {
     let body = ureq::get(feed_url)
         .set("User-Agent", "Mozilla/5.0")
         .call()
@@ -116,7 +120,8 @@ fn fetch_latest_entry(feed_url: &str) -> Result<(String, String, String, String)
         .trim_end_matches("]]>")
         .to_string();
     let link = extract_link_href(entry_xml);
-    Ok((title, strip_tags(&content_html), content_html, link))
+    let id = extract_tag(entry_xml, "id");
+    Ok((title, strip_tags(&content_html), content_html, link, id))
 }
 
 fn build_produce_prompt(entry_title: &str, entry_text: &str) -> String {
@@ -288,7 +293,7 @@ fn parse_produce_line(answer: &str, label: &str) -> Vec<String> {
         .collect()
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 struct ProduceResult {
     feed_title: String,
     feed_link: String,
@@ -299,44 +304,138 @@ struct ProduceResult {
     featured: Vec<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+struct ProduceCache {
+    entry_id: String,
+    #[serde(flatten)]
+    produce: ProduceResult,
+}
+
+fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+fn produce_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("produce_cache.json"))
+}
+
+fn recipes_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("recipes.json"))
+}
+
+/// A missing or corrupt cache file is just a cache miss, never a hard error.
+fn load_produce_cache(app: &tauri::AppHandle) -> Option<ProduceCache> {
+    let path = produce_cache_path(app).ok()?;
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn save_produce_cache(app: &tauri::AppHandle, cache: &ProduceCache) -> Result<(), String> {
+    let path = produce_cache_path(app)?;
+    let json = serde_json::to_string_pretty(cache).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
+}
+
+fn load_recipes_cache(app: &tauri::AppHandle) -> Option<Vec<Recipe>> {
+    let path = recipes_cache_path(app).ok()?;
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+// ponytail: full resync every launch. recipes.json has no per-row
+// timestamp/hash to diff against yet — if Mela's SQLite read ever gets
+// expensive enough to matter, add one and diff on ZID here instead of
+// overwriting the whole file.
+fn save_recipes_cache(app: &tauri::AppHandle, recipes: &[Recipe]) -> Result<(), String> {
+    let path = recipes_cache_path(app)?;
+    let json = serde_json::to_string_pretty(recipes).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize, Clone)]
+struct SyncResult {
+    produce: ProduceResult,
+    produce_from_cache: bool,
+    recipe_count: usize,
+}
+
+/// Runs on app launch: refreshes the produce cache only if the newsletter
+/// has posted a new entry since last time (cheap feed GET always happens;
+/// the expensive Claude extraction only runs on a cache miss), and always
+/// does a full resync of recipes.json from Mela's SQLite.
 #[tauri::command]
-async fn fetch_produce(
+async fn sync_on_launch(
     app: tauri::AppHandle,
     running: State<'_, RunningChild>,
-) -> Result<ProduceResult, String> {
-    let _ = app.emit("status", format!("Fetching latest post from {FEED_URL}..."));
-    let (entry_title, entry_text, entry_html, entry_link) = fetch_latest_entry(FEED_URL)?;
-    let _ = app.emit("status", format!("Latest post: {entry_title}"));
+) -> Result<SyncResult, String> {
+    let _ = app.emit("status", format!("Checking {FEED_URL}..."));
+    let (entry_title, entry_text, entry_html, entry_link, entry_id) =
+        fetch_latest_entry(FEED_URL)?;
 
-    let _ = app.emit("status", "Identifying in-season produce...");
-    let produce_prompt = build_produce_prompt(&entry_title, &entry_text);
-    let produce_answer = run_claude(&produce_prompt, &running, |_| {})?;
-    let fruit = parse_produce_line(&produce_answer, "Fruit");
-    let vegetable = parse_produce_line(&produce_answer, "Vegetable");
-    let pick = parse_produce_line(&produce_answer, "Pick of the week");
-    let featured = parse_produce_line(&produce_answer, "Featured");
-    if fruit.is_empty() && vegetable.is_empty() {
-        return Err("Could not identify any produce in the newsletter".to_string());
-    }
-    let _ = app.emit("status", "Done.");
+    let cached = load_produce_cache(&app);
+    let (produce, produce_from_cache) = match cached {
+        Some(cache) if cache.entry_id == entry_id => {
+            let _ = app.emit("status", "Using cached produce data.");
+            (cache.produce, true)
+        }
+        _ => {
+            let _ = app.emit("status", format!("Latest post: {entry_title}"));
+            let _ = app.emit("status", "Identifying in-season produce...");
+            let produce_prompt = build_produce_prompt(&entry_title, &entry_text);
+            let produce_answer = run_claude(&produce_prompt, &running, |_| {})?;
+            let fruit = parse_produce_line(&produce_answer, "Fruit");
+            let vegetable = parse_produce_line(&produce_answer, "Vegetable");
+            let pick = parse_produce_line(&produce_answer, "Pick of the week");
+            let featured = parse_produce_line(&produce_answer, "Featured");
+            if fruit.is_empty() && vegetable.is_empty() {
+                return Err("Could not identify any produce in the newsletter".to_string());
+            }
+            let produce = ProduceResult {
+                feed_title: entry_title,
+                feed_link: entry_link,
+                feed_html: entry_html,
+                fruit,
+                vegetable,
+                pick,
+                featured,
+            };
+            save_produce_cache(
+                &app,
+                &ProduceCache {
+                    entry_id,
+                    produce: produce.clone(),
+                },
+            )?;
+            (produce, false)
+        }
+    };
     let _ = app.emit(
         "produce",
         serde_json::json!({
-            "fruit": &fruit,
-            "vegetable": &vegetable,
-            "pick": &pick,
-            "featured": &featured,
+            "fruit": &produce.fruit,
+            "vegetable": &produce.vegetable,
+            "pick": &produce.pick,
+            "featured": &produce.featured,
         }),
     );
 
-    Ok(ProduceResult {
-        feed_title: entry_title,
-        feed_link: entry_link,
-        feed_html: entry_html,
-        fruit,
-        vegetable,
-        pick,
-        featured,
+    let _ = app.emit("status", "Syncing recipes from Mela...");
+    let recipes = load_recipes(&mela_db_path())?;
+    if recipes.is_empty() {
+        return Err(format!("No recipes found in {}", mela_db_path().display()));
+    }
+    save_recipes_cache(&app, &recipes)?;
+
+    let _ = app.emit("status", "Done.");
+    Ok(SyncResult {
+        produce,
+        produce_from_cache,
+        recipe_count: recipes.len(),
     })
 }
 
@@ -355,11 +454,11 @@ async fn match_recipes(
     vegetable: Vec<String>,
 ) -> Result<MatchResult, String> {
     let produce: Vec<String> = fruit.into_iter().chain(vegetable).collect();
-    let _ = app.emit("status", "Loading recipes from Mela...");
-    let db_path = mela_db_path();
-    let recipes = load_recipes(&db_path)?;
+    let _ = app.emit("status", "Loading recipes...");
+    let recipes = load_recipes_cache(&app)
+        .ok_or_else(|| "No cached recipes — sync hasn't run yet".to_string())?;
     if recipes.is_empty() {
-        return Err(format!("No recipes found in {}", db_path.display()));
+        return Err("No recipes found in the local cache".to_string());
     }
     let _ = app.emit("status", format!("Loaded {} recipes", recipes.len()));
 
@@ -390,6 +489,11 @@ async fn match_recipes(
 }
 
 #[tauri::command]
+fn list_recipes(app: tauri::AppHandle) -> Result<Vec<Recipe>, String> {
+    Ok(load_recipes_cache(&app).unwrap_or_default())
+}
+
+#[tauri::command]
 fn cancel(running: State<'_, RunningChild>) -> Result<(), String> {
     if let Some(pid) = *running.0.lock().unwrap() {
         Command::new("kill")
@@ -415,14 +519,79 @@ fn open_recipe(app: tauri::AppHandle, id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_produce() -> ProduceResult {
+        ProduceResult {
+            feed_title: "Dave's Market Update".into(),
+            feed_link: "https://example.com/post".into(),
+            feed_html: "<p>hi</p>".into(),
+            fruit: vec!["apple".into()],
+            vegetable: vec!["corn".into()],
+            pick: vec!["apple".into()],
+            featured: vec![],
+        }
+    }
+
+    #[test]
+    fn produce_cache_round_trips_through_json() {
+        let cache = ProduceCache {
+            entry_id: "tag:shopify,2026:post-123".into(),
+            produce: sample_produce(),
+        };
+        let json = serde_json::to_string(&cache).unwrap();
+        let parsed: ProduceCache = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.entry_id, cache.entry_id);
+        assert_eq!(parsed.produce.feed_title, cache.produce.feed_title);
+        assert_eq!(parsed.produce.fruit, cache.produce.fruit);
+    }
+
+    #[test]
+    fn recipes_cache_round_trips_through_json() {
+        let recipes = vec![Recipe {
+            id: "abc".into(),
+            title: "Fig Salad".into(),
+            description: "A salad".into(),
+            ingredients: "figs\ngoat cheese".into(),
+        }];
+        let json = serde_json::to_string(&recipes).unwrap();
+        let parsed: Vec<Recipe> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].title, "Fig Salad");
+        assert_eq!(parsed[0].ingredients, "figs\ngoat cheese");
+    }
+
+    // The cache-hit/miss decision in sync_on_launch turns on this exact
+    // comparison: same entry_id means reuse the cache, anything else
+    // (including no cache at all) means refetch.
+    #[test]
+    fn cache_hit_requires_matching_entry_id() {
+        let cache = ProduceCache {
+            entry_id: "post-1".into(),
+            produce: sample_produce(),
+        };
+        assert!(cache.entry_id == "post-1");
+        assert!(cache.entry_id != "post-2");
+    }
+
+    #[test]
+    fn corrupt_produce_cache_json_fails_to_parse_not_panics() {
+        let result: Result<ProduceCache, _> = serde_json::from_str("not valid json");
+        assert!(result.is_err());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(RunningChild::default())
         .invoke_handler(tauri::generate_handler![
-            fetch_produce,
+            sync_on_launch,
             match_recipes,
+            list_recipes,
             cancel,
             open_recipe,
             open_url

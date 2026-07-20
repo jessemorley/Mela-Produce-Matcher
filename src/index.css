@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
+
+/* Produce icons are near-black source art; recolor to white via invert
+   rather than re-exporting ~450 files. Kept on the <img> itself, not its
+   container, so the container's own background isn't inverted too. */
+.produce-icon {
+  filter: invert(1);
+}
