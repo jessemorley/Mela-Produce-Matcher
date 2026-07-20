@@ -115,8 +115,8 @@ export default function App() {
         onOpenArticle={() => setShowArticle(true)}
       />
 
-      <div className="flex-1 flex flex-col bg-slate-50/50 overflow-hidden">
-        <div className="h-8 shrink-0" data-tauri-drag-region />
+      <div className="flex-1 flex flex-col bg-slate-50/50 overflow-hidden relative">
+        <div className="absolute inset-x-0 top-0 h-8 z-10" data-tauri-drag-region />
         <div className="flex-1 overflow-y-auto">
           {showArticle ? (
             <ArticleView

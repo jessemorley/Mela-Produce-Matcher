@@ -228,8 +228,8 @@ export default function RecipeList({
   onOpenArticle,
 }) {
   return (
-    <div className="w-80 shrink-0 border-r border-slate-200/60 flex flex-col bg-white">
-      <div className="h-8 shrink-0" data-tauri-drag-region />
+    <div className="w-80 shrink-0 border-r border-slate-200/60 flex flex-col bg-white relative">
+      <div className="absolute inset-x-0 top-0 h-8 z-10" data-tauri-drag-region />
       <div className="p-3 border-b border-slate-100 space-y-2">
         <div className="relative">
           <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
