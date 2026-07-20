@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Search, Check, Sparkles, Heart, Clock } from "lucide-react";
 
 const { invoke } = window.__TAURI__.core;
@@ -108,32 +109,67 @@ function MatchingView({ rankedRecipes, activeRecipeId, onSelectRecipe, searchQue
 }
 
 function ProduceView({ produce, searchQuery }) {
+  const [category, setCategory] = useState("All");
+
   const items = [
     ...produce.fruit.map((name) => ({ name, type: "Fruit" })),
     ...produce.vegetable.map((name) => ({ name, type: "Vegetable" })),
-  ].filter((item) => item.name.toLowerCase().includes(searchQuery.toLowerCase()));
+  ]
+    .filter((item) => category === "All" || item.type === category)
+    .filter((item) => item.name.toLowerCase().includes(searchQuery.toLowerCase()));
 
   return (
-    <div className="flex-1 overflow-y-auto p-3 space-y-2">
-      {items.map((item) => (
-        <div
-          key={item.name}
-          className="p-2.5 rounded-lg border border-emerald-500/20 bg-emerald-50/40 flex items-center space-x-2.5"
-        >
-          <ProduceIcon type={item.type} />
-          <div>
-            <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1">
-              {item.name}
-              {inList(produce.pick, item.name) && <span title="Pick of the week">★</span>}
-            </h4>
-            <span className="text-[9px] text-slate-400">
-              {item.type}
-              {inList(produce.featured, item.name) && " · Featured"}
-            </span>
-          </div>
+    <div className="flex-1 overflow-y-auto p-3 space-y-4">
+      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+        <span className="text-xs font-bold text-slate-500">Filter Category</span>
+        <div className="flex space-x-1">
+          {["All", "Fruit", "Vegetable"].map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setCategory(cat)}
+              className={`text-[10px] px-2 py-0.5 rounded ${
+                category === cat
+                  ? "bg-slate-200 text-slate-800 font-semibold"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
         </div>
-      ))}
-      {items.length === 0 && <p className="text-xs text-slate-400">No produce loaded yet.</p>}
+      </div>
+      <div className="grid grid-cols-1 gap-2">
+        {items.map((item) => (
+          <div
+            key={item.name}
+            className="p-2.5 rounded-lg border border-emerald-500/20 bg-emerald-50/10 flex items-center justify-between transition-all hover:border-emerald-500/40"
+          >
+            <div className="flex items-center space-x-2.5">
+              <ProduceIcon type={item.type} />
+              <div>
+                <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1">
+                  {item.name}
+                  {inList(produce.pick, item.name) && <span title="Pick of the week">★</span>}
+                </h4>
+                <span className="text-[9px] text-slate-400">
+                  {item.type}
+                  {inList(produce.featured, item.name) && " · Featured"}
+                </span>
+              </div>
+            </div>
+            <div className="w-5 h-5 shrink-0 rounded-full bg-emerald-500 text-white flex items-center justify-center">
+              <Check className="w-3.5 h-3.5" />
+            </div>
+          </div>
+        ))}
+      </div>
+      {items.length === 0 && (
+        <p className="text-xs text-slate-400">
+          {produce.fruit.length + produce.vegetable.length === 0
+            ? "No produce loaded yet."
+            : "No produce matches that filter."}
+        </p>
+      )}
     </div>
   );
 }
