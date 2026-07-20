@@ -108,3 +108,12 @@ The app window uses a native macOS overlay title bar (`titleBarStyle:
 Overlay`, `hiddenTitle: true` in `tauri.conf.json`) — panes have their own
 `data-tauri-drag-region` spacer strips to keep the draggable area under the
 real traffic lights, there's no custom-drawn window chrome.
+
+Those strips only work because `capabilities/default.json` grants
+`core:window:allow-start-dragging` explicitly — `core:default` does *not*
+include it, and without it Tauri rejects every `start_dragging` call and the
+window silently won't drag anywhere. That failure mode is invisible except as
+an unhandled promise rejection in the webview console (right-click → Inspect),
+so it reads like a CSS or layout bug from the outside. Same applies to any
+other core command that quietly does nothing: check the console for a
+permission rejection before digging into the frontend.
