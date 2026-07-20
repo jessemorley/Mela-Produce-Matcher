@@ -4,25 +4,47 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Seasonal Recipe Suggester</title>
+    <title>Seasonal Recipes</title>
     <script type="module" src="/main.js" defer></script>
   </head>
 
   <body>
-    <main class="container">
-      <h1>What's in season?</h1>
+    <header id="toolbar" data-tauri-drag-region>
+      <button type="button" id="fetch-btn">Get Latest Produce</button>
+      <button type="button" id="match-btn" disabled>Match Recipes</button>
+      <button type="button" id="cancel-btn" hidden>Cancel</button>
+    </header>
 
-      <form class="row" id="suggest-form">
-        <input
-          id="feed-url"
-          placeholder="Feed URL"
-          value="https://www.harrisfarm.com.au/blogs/daves-market-update.atom"
-        />
-        <button type="submit" id="suggest-btn">Suggest recipes</button>
-      </form>
+    <div class="layout">
+      <aside id="sidebar">
+        <p id="feed-title" hidden></p>
+        <section id="fruit-section" hidden>
+          <h2>Fruit</h2>
+          <div id="fruit-chips" class="chips"></div>
+        </section>
+        <section id="vegetable-section" hidden>
+          <h2>Vegetables</h2>
+          <div id="vegetable-chips" class="chips"></div>
+        </section>
+        <a href="#" id="feed-link" hidden>Read the market update</a>
+      </aside>
 
-      <p id="status"></p>
-      <ol id="results"></ol>
-    </main>
+      <main id="content">
+        <p id="placeholder">
+          Get this week's in-season produce, then match it against your Mela
+          recipes.
+        </p>
+        <ol id="results"></ol>
+        <div id="article-view" hidden>
+          <a href="#" id="article-back">← Back to recipes</a>
+          <article id="article"></article>
+        </div>
+      </main>
+    </div>
+
+    <footer id="statusbar">
+      <span id="spinner" hidden></span>
+      <span id="status">Ready</span>
+    </footer>
   </body>
 </html>
