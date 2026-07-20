@@ -13,6 +13,7 @@ const CLAUDE_MODEL: &str = "sonnet";
 struct Recipe {
     id: String,
     title: String,
+    description: String,
     ingredients: String,
 }
 
@@ -35,7 +36,7 @@ fn load_recipes(db_path: &PathBuf) -> Result<Vec<Recipe>, String> {
 
     let mut stmt = conn
         .prepare(
-            "SELECT ZID, ZTITLE, ZINGREDIENTS FROM ZRECIPEOBJECT \
+            "SELECT ZID, ZTITLE, ZTEXT, ZINGREDIENTS FROM ZRECIPEOBJECT \
              WHERE ZTITLE IS NOT NULL ORDER BY ZTITLE",
         )
         .map_err(|e| e.to_string())?;
@@ -44,7 +45,8 @@ fn load_recipes(db_path: &PathBuf) -> Result<Vec<Recipe>, String> {
             Ok(Recipe {
                 id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                ingredients: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                description: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                ingredients: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -99,38 +101,129 @@ fn fetch_latest_entry(feed_url: &str) -> Result<(String, String), String> {
     Ok((title, strip_tags(&content_html)))
 }
 
-fn build_prompt(recipes: &[Recipe], entry_title: &str, entry_text: &str) -> String {
+fn build_produce_prompt(entry_title: &str, entry_text: &str) -> String {
+    format!(
+        "Here is this week's seasonal produce newsletter, \"{entry_title}\":\n\n\
+        {entry_text}\n\n\
+        List the in-season produce items it mentions (fruits, vegetables, herbs —\n\
+        not brands, regions, or recipes) as a single comma-separated line, singular\n\
+        form, nothing else. Example: apple, capsicum, corn, avocado, blueberry"
+    )
+}
+
+fn build_ranking_prompt(recipes: &[Recipe], produce: &[String], entry_title: &str) -> String {
     let recipe_lines = recipes
         .iter()
         .map(|r| {
             format!(
-                "- [{}] {}: {}",
+                "- [{}] {} — {}: {}",
                 r.id,
                 r.title,
+                r.description,
                 r.ingredients.replace('\n', "; ")
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
 
+    let produce_list = produce.join(", ");
+
     format!(
-        "Here is a home cook's recipe collection (id, title, ingredients):\n\n\
+        "Here is a home cook's recipe collection (id, title, description,\n\
+        ingredients), already filtered to ones that plausibly use this week's\n\
+        in-season produce ({produce_list}) from the newsletter \"{entry_title}\":\n\n\
         {recipe_lines}\n\n\
-        Here is this week's seasonal produce newsletter, \"{entry_title}\":\n\n\
-        {entry_text}\n\n\
-        First, extract the list of in-season produce mentioned in the newsletter.\n\
-        Then find recipes from the collection that use that produce, and rank them\n\
-        from best fit to weakest fit — do not group by produce item, order the\n\
-        whole list purely by how well each recipe matches what's in season right\n\
-        now. Only include genuine matches. Output each one as a single line in\n\
-        exactly this format:\n\n\
+        Rank these recipes from best fit to weakest fit against that produce list —\n\
+        do not group by produce item, order the whole list purely by how well each\n\
+        recipe matches what's in season right now. Only include genuine matches.\n\
+        Output each one as a single line in exactly this format:\n\n\
         N. **Recipe Title** — id: RECIPE_ID — matches: ingredient, ingredient — fit: one-line reason"
     )
+}
+
+fn filter_recipes_by_produce<'a>(recipes: &'a [Recipe], produce: &[String]) -> Vec<&'a Recipe> {
+    recipes
+        .iter()
+        .filter(|r| {
+            let searchable = format!("{} {}", r.description, r.ingredients).to_lowercase();
+            produce.iter().any(|p| searchable.contains(&p.to_lowercase()))
+        })
+        .collect()
+}
+
+/// Runs `claude -p` with streaming output. Each completed line of the final
+/// answer is passed to `on_line` as it arrives; the full answer is returned
+/// at the end for callers (like the produce-extraction step) that just want
+/// the whole result rather than a running stream.
+fn run_claude(prompt: &str, mut on_line: impl FnMut(&str)) -> Result<String, String> {
+    let mut child = Command::new("claude")
+        .args([
+            "-p",
+            "--model",
+            CLAUDE_MODEL,
+            "--output-format",
+            "stream-json",
+            "--include-partial-messages",
+            "--verbose",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to launch claude CLI: {e}"))?;
+
+    child
+        .stdin
+        .take()
+        .expect("stdin piped")
+        .write_all(prompt.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    let stdout = child.stdout.take().expect("stdout piped");
+    let mut line_buf = String::new();
+    let mut full_answer = String::new();
+    for line in BufReader::new(stdout).lines() {
+        let line = line.map_err(|e| e.to_string())?;
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if let Some(delta) = event["event"]["delta"]["text"].as_str() {
+            full_answer.push_str(delta);
+            line_buf.push_str(delta);
+            while let Some(pos) = line_buf.find('\n') {
+                let finished_line: String = line_buf.drain(..=pos).collect();
+                let finished_line = finished_line.trim_end_matches('\n');
+                if !finished_line.trim().is_empty() {
+                    on_line(finished_line);
+                }
+            }
+        }
+    }
+    if !line_buf.trim().is_empty() {
+        on_line(line_buf.trim());
+    }
+
+    let status = child.wait().map_err(|e| e.to_string())?;
+    if !status.success() {
+        let mut stderr_text = String::new();
+        if let Some(mut stderr) = child.stderr.take() {
+            use std::io::Read;
+            let _ = stderr.read_to_string(&mut stderr_text);
+        }
+        return Err(format!(
+            "claude CLI failed ({}): {}",
+            status,
+            stderr_text.trim()
+        ));
+    }
+
+    Ok(full_answer)
 }
 
 #[derive(Serialize, Clone)]
 struct SuggestResult {
     recipe_count: usize,
+    candidate_count: usize,
     feed_title: String,
 }
 
@@ -150,47 +243,43 @@ async fn suggest(app: tauri::AppHandle, feed_url: Option<String>) -> Result<Sugg
     let (entry_title, entry_text) = fetch_latest_entry(&feed_url)?;
     let _ = app.emit("status", format!("Latest post: {entry_title}"));
 
-    let prompt = build_prompt(&recipes, &entry_title, &entry_text);
+    let _ = app.emit("status", "Identifying in-season produce...");
+    let produce_prompt = build_produce_prompt(&entry_title, &entry_text);
+    let produce_answer = run_claude(&produce_prompt, |_| {})?;
+    let produce: Vec<String> = produce_answer
+        .trim()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if produce.is_empty() {
+        return Err("Could not identify any produce in the newsletter".to_string());
+    }
+    let _ = app.emit("status", format!("In season: {}", produce.join(", ")));
 
-    let _ = app.emit("status", "Asking Claude for suggestions (this can take a minute)...");
-    let mut child = Command::new("claude")
-        .args(["-p", "--model", CLAUDE_MODEL])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to launch claude CLI: {e}"))?;
+    let candidates = filter_recipes_by_produce(&recipes, &produce);
+    if candidates.is_empty() {
+        return Err("No recipes match this week's produce".to_string());
+    }
+    let _ = app.emit(
+        "status",
+        format!(
+            "Ranking {} matching recipes (of {})...",
+            candidates.len(),
+            recipes.len()
+        ),
+    );
 
-    child
-        .stdin
-        .take()
-        .expect("stdin piped")
-        .write_all(prompt.as_bytes())
-        .map_err(|e| e.to_string())?;
-
-    let stdout = child.stdout.take().expect("stdout piped");
-    for line in BufReader::new(stdout).lines() {
-        let line = line.map_err(|e| e.to_string())?;
+    let candidate_recipes: Vec<Recipe> = candidates.into_iter().cloned().collect();
+    let ranking_prompt = build_ranking_prompt(&candidate_recipes, &produce, &entry_title);
+    run_claude(&ranking_prompt, |line| {
         let _ = app.emit("suggestion-line", line);
-    }
-
-    let status = child.wait().map_err(|e| e.to_string())?;
-    if !status.success() {
-        let mut stderr_text = String::new();
-        if let Some(mut stderr) = child.stderr.take() {
-            use std::io::Read;
-            let _ = stderr.read_to_string(&mut stderr_text);
-        }
-        return Err(format!(
-            "claude CLI failed ({}): {}",
-            status,
-            stderr_text.trim()
-        ));
-    }
+    })?;
 
     let _ = app.emit("status", "Done.");
     Ok(SuggestResult {
         recipe_count: recipes.len(),
+        candidate_count: candidate_recipes.len(),
         feed_title: entry_title,
     })
 }
