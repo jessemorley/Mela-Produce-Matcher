@@ -77,17 +77,12 @@ how well it fits. Only suggest recipes that are a genuine match. Output as
 plain readable text, grouped by produce item."""
 
 
-def ask_claude(prompt: str) -> str:
-    result = subprocess.run(
-        ["claude", "-p", "--model", MODEL],
-        input=prompt,
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+def ask_claude(prompt: str) -> None:
+    # stdout/stderr inherited (not captured) so claude's own output streams
+    # straight to the terminal instead of appearing all at once at the end.
+    result = subprocess.run(["claude", "-p", "--model", MODEL], input=prompt, text=True, timeout=120)
     if result.returncode != 0:
-        sys.exit(f"claude CLI failed: {result.stderr.strip()}")
-    return result.stdout.strip()
+        sys.exit(f"claude CLI failed (exit {result.returncode})")
 
 
 def main() -> None:
@@ -97,11 +92,18 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="skip the claude call, just show what would be sent")
     args = parser.parse_args()
 
+    def status(msg: str) -> None:
+        print(msg, file=sys.stderr, flush=True)
+
+    status("Loading recipes from Mela...")
     recipes = load_recipes(args.db)
     if not recipes:
         sys.exit(f"No recipes found in {args.db}")
+    status(f"  loaded {len(recipes)} recipes")
 
+    status(f"Fetching latest post from {args.feed_url}...")
     entry_title, entry_text = fetch_latest_entry(args.feed_url)
+    status(f"  latest post: {entry_title!r}")
     prompt = build_prompt(recipes, entry_title, entry_text)
 
     if args.dry_run:
@@ -111,7 +113,8 @@ def main() -> None:
         print(prompt[:2000])
         return
 
-    print(ask_claude(prompt))
+    status("Asking Claude for suggestions (this can take a minute)...")
+    ask_claude(prompt)
 
 
 if __name__ == "__main__":
