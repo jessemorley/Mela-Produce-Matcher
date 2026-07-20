@@ -50,15 +50,15 @@ export default function ArticleView({ title, html, onBack }) {
     <div className="p-6">
       <button
         onClick={onBack}
-        className="flex items-center gap-1 text-xs text-slate-400 hover:text-white mb-4"
+        className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-900 mb-4"
       >
         <ChevronLeft className="w-3.5 h-3.5" />
         Back
       </button>
-      <h2 className="text-lg font-bold text-white mb-4">{title}</h2>
+      <h2 className="text-lg font-bold text-slate-900 mb-4">{title}</h2>
       <article
         ref={articleRef}
-        className="text-sm text-slate-300 leading-relaxed space-y-3 [&_a]:text-emerald-400 [&_a]:underline [&_img]:max-w-full [&_img]:rounded-lg"
+        className="text-sm text-slate-600 leading-relaxed space-y-3 [&_a]:text-emerald-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded-lg"
       />
     </div>
   );

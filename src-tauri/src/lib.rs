@@ -20,6 +20,14 @@ struct Recipe {
     title: String,
     description: String,
     ingredients: String,
+    // Added after the first release; serde(default) keeps an existing
+    // recipes.json written without them loading instead of erroring.
+    #[serde(default)]
+    favorite: bool,
+    #[serde(default)]
+    total_time: String,
+    #[serde(default, rename = "yield")]
+    yield_: String,
 }
 
 fn mela_db_path() -> PathBuf {
@@ -41,7 +49,9 @@ fn load_recipes(db_path: &PathBuf) -> Result<Vec<Recipe>, String> {
 
     let mut stmt = conn
         .prepare(
-            "SELECT ZID, ZTITLE, ZTEXT, ZINGREDIENTS FROM ZRECIPEOBJECT \
+            "SELECT ZID, ZTITLE, ZTEXT, ZINGREDIENTS, ZFAVORITE, \
+             COALESCE(NULLIF(ZTOTALTIME, ''), ZCOOKTIME, ZPREPTIME), ZYIELD \
+             FROM ZRECIPEOBJECT \
              WHERE ZTITLE IS NOT NULL ORDER BY ZTITLE",
         )
         .map_err(|e| e.to_string())?;
@@ -52,6 +62,9 @@ fn load_recipes(db_path: &PathBuf) -> Result<Vec<Recipe>, String> {
                 title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 description: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 ingredients: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                favorite: row.get::<_, Option<i64>>(4)?.unwrap_or(0) == 1,
+                total_time: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                yield_: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -555,12 +568,29 @@ mod tests {
             title: "Fig Salad".into(),
             description: "A salad".into(),
             ingredients: "figs\ngoat cheese".into(),
+            favorite: true,
+            total_time: "25min".into(),
+            yield_: "2".into(),
         }];
         let json = serde_json::to_string(&recipes).unwrap();
         let parsed: Vec<Recipe> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].title, "Fig Salad");
         assert_eq!(parsed[0].ingredients, "figs\ngoat cheese");
+        assert!(parsed[0].favorite);
+        assert_eq!(parsed[0].total_time, "25min");
+        assert_eq!(parsed[0].yield_, "2");
+    }
+
+    // A recipes.json written before favorite/total_time/yield existed must
+    // still load rather than failing the whole cache read.
+    #[test]
+    fn recipes_cache_loads_pre_metadata_json() {
+        let json = r#"[{"id":"abc","title":"Fig Salad","description":"A salad","ingredients":"figs"}]"#;
+        let parsed: Vec<Recipe> = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed[0].title, "Fig Salad");
+        assert!(!parsed[0].favorite);
+        assert_eq!(parsed[0].total_time, "");
     }
 
     // The cache-hit/miss decision in sync_on_launch turns on this exact

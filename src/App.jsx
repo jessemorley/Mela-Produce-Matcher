@@ -92,7 +92,7 @@ export default function App() {
   }
 
   return (
-    <div className="w-screen h-screen bg-slate-950 flex text-slate-100 font-sans overflow-hidden select-none">
+    <div className="w-screen h-screen bg-slate-50 flex text-slate-800 font-sans overflow-hidden select-none">
       <Sidebar
         selectedNav={selectedNav}
         onSelectNav={setSelectedNav}
@@ -115,7 +115,7 @@ export default function App() {
         onOpenArticle={() => setShowArticle(true)}
       />
 
-      <div className="flex-1 flex flex-col bg-slate-950/50 overflow-hidden">
+      <div className="flex-1 flex flex-col bg-slate-50/50 overflow-hidden">
         <div className="h-8 shrink-0" data-tauri-drag-region />
         <div className="flex-1 overflow-y-auto">
           {showArticle ? (
@@ -127,14 +127,14 @@ export default function App() {
           ) : activeRecipe ? (
             <RecipeDetail recipe={activeRecipe} />
           ) : (
-            <div className="h-full flex flex-col items-center justify-center text-slate-500 text-sm gap-2">
+            <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm gap-2">
               <Leaf className="w-8 h-8" />
               <p>Match recipes against this week's produce to get started.</p>
             </div>
           )}
         </div>
 
-        <div className="h-9 shrink-0 border-t border-slate-800/80 px-4 flex items-center justify-between text-[11px] text-slate-400">
+        <div className="h-9 shrink-0 border-t border-slate-200/60 px-4 flex items-center justify-between text-[11px] text-slate-500">
           <span className="flex items-center gap-2">
             {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
             {status}
@@ -142,7 +142,7 @@ export default function App() {
           {busy && (
             <button
               onClick={cancel}
-              className="flex items-center gap-1 text-rose-400 hover:text-rose-300"
+              className="flex items-center gap-1 text-rose-600 hover:text-rose-700"
             >
               <XCircle className="w-3.5 h-3.5" />
               Cancel
