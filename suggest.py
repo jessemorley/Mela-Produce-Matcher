@@ -71,18 +71,42 @@ Here is this week's seasonal produce newsletter, "{entry_title}":
 {entry_text}
 
 First, extract the list of in-season produce mentioned in the newsletter.
-Then suggest which recipes from the collection best use that produce.
-For each match, name the recipe, which seasonal ingredient(s) it uses, and
-how well it fits. Only suggest recipes that are a genuine match. Output as
-plain readable text, grouped by produce item."""
+Then find recipes from the collection that use that produce, and rank them
+from best fit to weakest fit — do not group by produce item, order the
+whole list purely by how well each recipe matches what's in season right
+now. Only include genuine matches. Output each one as a single line in
+exactly this format:
+
+N. **Recipe Title** — matches: ingredient, ingredient — fit: one-line reason"""
+
+
+BOLD, DIM, GREEN, CYAN, RESET = "\033[1m", "\033[2m", "\033[32m", "\033[36m", "\033[0m"
+
+
+def colorize(line: str) -> str:
+    line = re.sub(r"\*\*(.+?)\*\*", rf"{BOLD}\1{RESET}", line)
+    line = re.sub(r"^\d+\.", lambda m: f"{GREEN}{m.group(0)}{RESET}", line)
+    line = re.sub(r"\bfit:", f"{CYAN}fit:{RESET}", line)
+    return line
 
 
 def ask_claude(prompt: str) -> None:
-    # stdout/stderr inherited (not captured) so claude's own output streams
-    # straight to the terminal instead of appearing all at once at the end.
-    result = subprocess.run(["claude", "-p", "--model", MODEL], input=prompt, text=True, timeout=120)
-    if result.returncode != 0:
-        sys.exit(f"claude CLI failed (exit {result.returncode})")
+    use_color = sys.stdout.isatty()
+    proc = subprocess.Popen(
+        ["claude", "-p", "--model", MODEL],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    proc.stdin.write(prompt)
+    proc.stdin.close()
+    for line in proc.stdout:
+        line = line.rstrip("\n")
+        print(colorize(line) if use_color else line)
+    proc.wait()
+    if proc.returncode != 0:
+        sys.exit(f"claude CLI failed (exit {proc.returncode})")
 
 
 def main() -> None:
