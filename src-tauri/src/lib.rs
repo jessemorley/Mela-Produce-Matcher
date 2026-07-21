@@ -35,6 +35,11 @@ struct Recipe {
     // carried across every resync by merge_recipes.
     #[serde(default)]
     key_ingredients: Vec<String>,
+    // Indices into ingredient_lines() naming the fresh-produce lines;
+    // everything else is pantry. Stored as indices rather than copies of the
+    // text so the two groups always partition the real lines exactly.
+    #[serde(default)]
+    produce_lines: Vec<usize>,
 }
 
 fn mela_db_path() -> PathBuf {
@@ -73,6 +78,7 @@ fn load_recipes(db_path: &PathBuf) -> Result<Vec<Recipe>, String> {
                 total_time: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
                 yield_: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
                 key_ingredients: Vec::new(),
+                produce_lines: Vec::new(),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -165,49 +171,92 @@ fn build_produce_prompt(entry_title: &str, entry_text: &str) -> String {
 }
 
 fn build_key_ingredient_prompt(recipes: &[Recipe]) -> String {
+    // Ingredient lines are numbered so the answer can refer to them by index
+    // rather than echoing the text back — indices are unambiguous to parse
+    // and cannot silently reword a line.
     let recipe_lines = recipes
         .iter()
         .map(|r| {
-            format!(
-                "- [{}] {} — {}: {}",
-                r.id,
-                r.title,
-                r.description,
-                r.ingredients.replace('\n', "; ")
-            )
+            let numbered = ingredient_lines(r)
+                .iter()
+                .enumerate()
+                .map(|(i, l)| format!("    {i}. {l}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("- [{}] {} — {}\n{}", r.id, r.title, r.description, numbered)
         })
         .collect::<Vec<_>>()
         .join("\n");
 
     format!(
         "Here are recipes from a home cook's collection (id, title, description,\n\
-        ingredients):\n\n\
+        then numbered ingredient lines):\n\n\
         {recipe_lines}\n\n\
-        For each recipe, identify the 2-4 ingredients that actually define the\n\
-        dish — the ones a shopper would build the meal around. Rank them\n\
-        most-defining first. In \"asparagus and tofu stir fry\" the key\n\
-        ingredients are asparagus and tofu; a spring onion garnish, oil,\n\
-        salt, and pantry staples are NOT key ingredients. Prefer fresh produce\n\
-        and proteins over seasonings and condiments. Use short singular\n\
-        ingredient names (\"asparagus\", not \"2 bunches trimmed asparagus\").\n\n\
+        For each recipe, report two things.\n\n\
+        1. key: the 2-4 ingredients that actually define the dish — the ones a\n\
+        shopper would build the meal around. Rank them most-defining first. In\n\
+        \"asparagus and tofu stir fry\" the key ingredients are asparagus and\n\
+        tofu; a spring onion garnish, oil, salt, and pantry staples are NOT key\n\
+        ingredients. Prefer fresh produce and proteins over seasonings and\n\
+        condiments. Use short singular ingredient names (\"asparagus\", not\n\
+        \"2 bunches trimmed asparagus\").\n\n\
+        2. produce: the line NUMBERS of ingredient lines whose main item is\n\
+        fresh produce — fruit, vegetables, fresh herbs, salad leaves. Everything\n\
+        else is pantry: salt, pepper, oil, vinegar, flour, sugar, spices, dried\n\
+        herbs, stock, tinned goods, sauces, nuts, grains, pasta, dairy, eggs and\n\
+        meat. A line that is a section header (\"# FILLING\") or has no\n\
+        ingredient at all belongs in neither — just omit its number. Judge by\n\
+        the main item: \"1 medium onion (diced)\" is produce, \"1 tsp onion\n\
+        powder\" is pantry.\n\n\
         Output one line per recipe, in exactly this format, nothing else:\n\n\
-        id: RECIPE_ID — key: ingredient, ingredient, ingredient"
+        id: RECIPE_ID — key: ingredient, ingredient — produce: 0, 3, 7"
     )
 }
 
-/// Parses the `id: X — key: a, b, c` lines back into (id, key_ingredients).
-/// Unparseable lines (stray commentary) are skipped rather than failing the
-/// whole batch — a recipe that misses out just stays unanalysed and gets
-/// picked up by the next sync.
-fn parse_key_ingredient_lines(answer: &str) -> Vec<(String, Vec<String>)> {
+/// The recipe's ingredient blob split into trimmed, non-empty lines. The
+/// canonical ordering that `produce_lines` indices refer to, so the prompt
+/// and the frontend must both derive lines this way.
+fn ingredient_lines(recipe: &Recipe) -> Vec<&str> {
+    recipe
+        .ingredients
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// One recipe's analysis as parsed back out of Claude's answer.
+struct Analysis {
+    key_ingredients: Vec<String>,
+    produce_lines: Vec<usize>,
+}
+
+/// Parses the `id: X — key: a, b — produce: 0, 3` lines. Unparseable lines
+/// (stray commentary) are skipped rather than failing the whole batch — a
+/// recipe that misses out just stays unanalysed and gets picked up by the
+/// next sync. A missing or malformed `produce:` section is tolerated as an
+/// empty list, so a recipe still gets its key ingredients.
+fn parse_key_ingredient_lines(answer: &str) -> Vec<(String, Analysis)> {
     answer
         .lines()
         .filter_map(|line| {
             let line = line.trim().trim_start_matches('-').trim();
             let rest = line.strip_prefix("id:")?;
-            let (id, keys) = rest.split_once("—").or_else(|| rest.split_once(" - "))?;
-            let keys = keys.trim().strip_prefix("key:")?;
+            let (id, tail) = rest.split_once("—").or_else(|| rest.split_once(" - "))?;
+            // The produce section is optional, so split it off first and let
+            // whatever remains be the key list.
+            let (keys, produce) = match tail.split_once("— produce:") {
+                Some((k, p)) => (k, Some(p)),
+                None => match tail.split_once("produce:") {
+                    Some((k, p)) => (k, Some(p)),
+                    None => (tail, None),
+                },
+            };
             let keys: Vec<String> = keys
+                .trim()
+                .trim_end_matches('—')
+                .trim()
+                .strip_prefix("key:")?
                 .split(',')
                 .map(|s| s.trim().to_lowercase())
                 .filter(|s| !s.is_empty())
@@ -215,7 +264,20 @@ fn parse_key_ingredient_lines(answer: &str) -> Vec<(String, Vec<String>)> {
             if keys.is_empty() {
                 return None;
             }
-            Some((id.trim().to_string(), keys))
+            let produce_lines = produce
+                .map(|p| {
+                    p.split(',')
+                        .filter_map(|n| n.trim().parse::<usize>().ok())
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some((
+                id.trim().to_string(),
+                Analysis {
+                    key_ingredients: keys,
+                    produce_lines,
+                },
+            ))
         })
         .collect()
 }
@@ -283,20 +345,33 @@ fn score_recipe(recipe: &Recipe, produce: &[String]) -> (u32, Vec<String>) {
     (score, matched)
 }
 
+/// A recipe still needs the Claude analysis pass if it has no key
+/// ingredients, or if it was analysed before produce/pantry splitting
+/// existed and so has ingredient lines but no produce_lines. The second
+/// clause is what backfills an existing recipes.json on the first launch
+/// after that change.
+fn needs_analysis(recipe: &Recipe) -> bool {
+    recipe.key_ingredients.is_empty()
+        || (recipe.produce_lines.is_empty() && !ingredient_lines(recipe).is_empty())
+}
+
 /// Carries analysed key_ingredients across a full Mela resync. `fresh` comes
 /// straight from SQLite with empty key_ingredients; anything already
 /// analysed in the old cache keeps its list, so only genuinely new recipes
 /// come out unanalysed.
 fn merge_recipes(fresh: Vec<Recipe>, cached: &[Recipe]) -> Vec<Recipe> {
-    let known: HashMap<&str, &Vec<String>> = cached
-        .iter()
-        .map(|r| (r.id.as_str(), &r.key_ingredients))
-        .collect();
+    let known: HashMap<&str, &Recipe> = cached.iter().map(|r| (r.id.as_str(), r)).collect();
     fresh
         .into_iter()
         .map(|mut r| {
-            if let Some(keys) = known.get(r.id.as_str()) {
-                r.key_ingredients = (*keys).clone();
+            if let Some(prev) = known.get(r.id.as_str()) {
+                r.key_ingredients = prev.key_ingredients.clone();
+                // Only carry line indices when the ingredient text is
+                // unchanged — an edit in Mela reflows the lines and would
+                // leave the stored indices pointing at the wrong ones.
+                if prev.ingredients == r.ingredients {
+                    r.produce_lines = prev.produce_lines.clone();
+                }
             }
             r
         })
@@ -558,7 +633,7 @@ async fn sync_on_launch(
 
     let unanalyzed_count = recipes
         .iter()
-        .filter(|r| r.key_ingredients.is_empty())
+        .filter(|r| needs_analysis(r))
         .count();
 
     let _ = app.emit(
@@ -577,9 +652,15 @@ async fn sync_on_launch(
     })
 }
 
-/// Analyses every cached recipe that has no key_ingredients yet, in one
-/// Claude call, and writes the results back into recipes.json. Triggered by
-/// the "Sync Now" button, not on launch.
+/// Recipes per Claude call. Small enough that a whole library doesn't go in
+/// one prompt (166 recipes is ~39k tokens of input plus an index list per
+/// ingredient line back), large enough that a couple of new recipes is still
+/// a single call.
+const ANALYSIS_BATCH: usize = 25;
+
+/// Analyses every cached recipe that still needs it, in batches, writing
+/// results back to recipes.json after each one. Triggered by the "Sync Now"
+/// button, not on launch.
 #[tauri::command]
 async fn analyze_new_recipes(
     app: tauri::AppHandle,
@@ -589,32 +670,50 @@ async fn analyze_new_recipes(
         .ok_or_else(|| "No cached recipes — sync hasn't run yet".to_string())?;
     let pending: Vec<Recipe> = recipes
         .iter()
-        .filter(|r| r.key_ingredients.is_empty())
+        .filter(|r| needs_analysis(r))
         .cloned()
         .collect();
     if pending.is_empty() {
         return Ok(0);
     }
 
-    let _ = app.emit(
-        "status",
-        format!("Analysing {} new recipes...", pending.len()),
-    );
-    let answer = run_claude(&build_key_ingredient_prompt(&pending), &running, |_| {})?;
-    let parsed: HashMap<String, Vec<String>> =
-        parse_key_ingredient_lines(&answer).into_iter().collect();
-    if parsed.is_empty() {
+    let total = pending.len();
+    let mut analyzed = 0;
+    for batch in pending.chunks(ANALYSIS_BATCH) {
+        let _ = app.emit(
+            "status",
+            format!("Analysing recipes... {analyzed} of {total}"),
+        );
+        let answer = run_claude(&build_key_ingredient_prompt(batch), &running, |_| {})?;
+        let parsed: HashMap<String, Analysis> =
+            parse_key_ingredient_lines(&answer).into_iter().collect();
+
+        // Only this batch's ids, so a recipe already handled by an earlier
+        // batch isn't rewritten and double-counted.
+        let batch_ids: std::collections::HashSet<&str> =
+            batch.iter().map(|r| r.id.as_str()).collect();
+        for recipe in recipes.iter_mut().filter(|r| batch_ids.contains(r.id.as_str())) {
+            if let Some(analysis) = parsed.get(&recipe.id) {
+                recipe.key_ingredients = analysis.key_ingredients.clone();
+                // Drop out-of-range indices rather than trusting the answer —
+                // the frontend slices real lines with these.
+                let line_count = ingredient_lines(recipe).len();
+                recipe.produce_lines = analysis
+                    .produce_lines
+                    .iter()
+                    .copied()
+                    .filter(|i| *i < line_count)
+                    .collect();
+                analyzed += 1;
+            }
+        }
+        // Save per batch so a failure or cancel keeps the work already done;
+        // the next run re-derives what's left from needs_analysis.
+        save_recipes_cache(&app, &recipes)?;
+    }
+    if analyzed == 0 {
         return Err("Claude returned no usable key ingredients".to_string());
     }
-
-    let mut analyzed = 0;
-    for recipe in recipes.iter_mut() {
-        if let Some(keys) = parsed.get(&recipe.id) {
-            recipe.key_ingredients = keys.clone();
-            analyzed += 1;
-        }
-    }
-    save_recipes_cache(&app, &recipes)?;
 
     let _ = app.emit("status", format!("Analysed {analyzed} recipes."));
     Ok(analyzed)
@@ -738,6 +837,7 @@ mod tests {
             total_time: "25min".into(),
             yield_: "2".into(),
             key_ingredients: vec!["figs".into()],
+            produce_lines: vec![0],
         }];
         let json = serde_json::to_string(&recipes).unwrap();
         let parsed: Vec<Recipe> = serde_json::from_str(&json).unwrap();
@@ -760,21 +860,78 @@ mod tests {
             total_time: String::new(),
             yield_: String::new(),
             key_ingredients: keys.iter().map(|k| k.to_string()).collect(),
+            produce_lines: Vec::new(),
         }
     }
 
     #[test]
     fn parses_key_ingredient_lines_and_skips_commentary() {
         let answer = "Here are the results:\n\
-                      id: abc — key: Asparagus, Tofu\n\
-                      - id: def — key: fig, goat cheese\n\
+                      id: abc — key: Asparagus, Tofu — produce: 0, 2\n\
+                      - id: def — key: fig, goat cheese — produce: 1\n\
                       that's everything!";
         let parsed = parse_key_ingredient_lines(answer);
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].0, "abc");
         // Lowercased so scoring can compare against produce names directly.
-        assert_eq!(parsed[0].1, vec!["asparagus", "tofu"]);
+        assert_eq!(parsed[0].1.key_ingredients, vec!["asparagus", "tofu"]);
+        assert_eq!(parsed[0].1.produce_lines, vec![0, 2]);
         assert_eq!(parsed[1].0, "def");
+        assert_eq!(parsed[1].1.produce_lines, vec![1]);
+    }
+
+    // A missing produce section must not cost the recipe its key
+    // ingredients — it degrades to "no produce lines known" instead.
+    #[test]
+    fn produce_section_is_optional() {
+        let parsed = parse_key_ingredient_lines("id: abc — key: asparagus, tofu");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].1.key_ingredients, vec!["asparagus", "tofu"]);
+        assert!(parsed[0].1.produce_lines.is_empty());
+    }
+
+    // Recipes analysed before produce/pantry splitting have key ingredients
+    // but no produce_lines; they must be picked up again so an existing
+    // recipes.json backfills on the next Sync Now.
+    #[test]
+    fn needs_analysis_backfills_recipes_missing_the_produce_split() {
+        let mut analysed = recipe("a", "Fig Salad", &["figs"]);
+        analysed.ingredients = "2 figs\n1 tbsp olive oil".into();
+        assert!(needs_analysis(&analysed));
+
+        analysed.produce_lines = vec![0];
+        assert!(!needs_analysis(&analysed));
+
+        // No key ingredients at all is still the primary trigger.
+        assert!(needs_analysis(&recipe("b", "New", &[])));
+
+        // A recipe with no ingredient text can never gain produce_lines, so
+        // it must not be re-analysed forever.
+        let mut empty = recipe("c", "No Ingredients", &["something"]);
+        empty.ingredients = String::new();
+        assert!(!needs_analysis(&empty));
+    }
+
+    // An edit in Mela reflows the ingredient lines, so stored indices would
+    // point at the wrong ones and must be dropped.
+    #[test]
+    fn merge_drops_produce_lines_when_ingredients_change() {
+        let mut old = recipe("a", "Fig Salad", &["figs"]);
+        old.ingredients = "2 figs\n1 tbsp olive oil".into();
+        old.produce_lines = vec![0];
+
+        let mut same = recipe("a", "Fig Salad", &[]);
+        same.ingredients = "2 figs\n1 tbsp olive oil".into();
+        let merged = merge_recipes(vec![same], std::slice::from_ref(&old));
+        assert_eq!(merged[0].produce_lines, vec![0]);
+        assert_eq!(merged[0].key_ingredients, vec!["figs"]);
+
+        let mut edited = recipe("a", "Fig Salad", &[]);
+        edited.ingredients = "1 tbsp olive oil\n2 figs\n1 tsp salt".into();
+        let merged = merge_recipes(vec![edited], std::slice::from_ref(&old));
+        assert!(merged[0].produce_lines.is_empty());
+        // Key ingredients still survive; only the line indices are stale.
+        assert_eq!(merged[0].key_ingredients, vec!["figs"]);
     }
 
     // The whole point of the redesign: a recipe built around in-season

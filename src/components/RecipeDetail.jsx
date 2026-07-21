@@ -10,12 +10,58 @@ function inList(list, name) {
   });
 }
 
-export default function RecipeDetail({ recipe }) {
-  const ingredientLines = (recipe.ingredients || "")
+// Must stay in step with ingredient_lines() in lib.rs — produce_lines
+// indexes into exactly this list.
+function ingredientLinesOf(recipe) {
+  return (recipe.ingredients || "")
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function IngredientRow({ line, inSeason }) {
+  return (
+    <div
+      className={`flex items-center justify-between p-2.5 rounded-lg border ${
+        inSeason
+          ? "border-emerald-500/20 bg-emerald-50/60 text-slate-800"
+          : "border-slate-200/60 text-slate-500"
+      }`}
+    >
+      <div className="flex items-center space-x-2.5">
+        <div
+          className={`w-4 h-4 rounded flex items-center justify-center shrink-0 ${
+            inSeason ? "bg-emerald-500 text-white" : "border border-slate-300"
+          }`}
+        >
+          {inSeason && <Check className="w-3 h-3" />}
+        </div>
+        <span className="text-xs">{line}</span>
+      </div>
+      {inSeason && (
+        <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold shrink-0">
+          In Season
+        </span>
+      )}
+    </div>
+  );
+}
+
+export default function RecipeDetail({ recipe }) {
+  const ingredientLines = ingredientLinesOf(recipe);
   const matches = recipe.matches || [];
+
+  // Claude labels the produce lines by index; everything else is pantry, so
+  // the two columns always partition the real lines with nothing dropped.
+  // An unanalysed recipe has no indices — show every line as pantry rather
+  // than an empty produce column implying it has no vegetables.
+  // Mela marks section headers with a leading "#" ("# FILLING"). They are
+  // not ingredients, so they'd otherwise render as pantry rows with a
+  // checkbox.
+  const produceIdx = new Set(recipe.produce_lines || []);
+  const isHeader = (line) => line.startsWith("#");
+  const produce = ingredientLines.filter((l, i) => produceIdx.has(i) && !isHeader(l));
+  const pantry = ingredientLines.filter((l, i) => !produceIdx.has(i) && !isHeader(l));
 
   return (
     <div className="p-6 space-y-6">
@@ -65,55 +111,48 @@ export default function RecipeDetail({ recipe }) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        {ingredientLines.length > 0 && (
-          <div className="lg:col-span-2 space-y-3">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-              Ingredients
-            </h3>
-            <div className="space-y-2">
-              {ingredientLines.map((ing, idx) => {
-                const isInSeason = matches.length > 0 && inList(matches, ing);
-                return (
-                  <div
-                    key={idx}
-                    className={`flex items-center justify-between p-2.5 rounded-lg border ${
-                      isInSeason
-                        ? "border-emerald-500/20 bg-emerald-50/60 text-slate-800"
-                        : "border-slate-200/60 text-slate-500"
-                    }`}
-                  >
-                    <div className="flex items-center space-x-2.5">
-                      <div
-                        className={`w-4 h-4 rounded flex items-center justify-center shrink-0 ${
-                          isInSeason ? "bg-emerald-500 text-white" : "border border-slate-300"
-                        }`}
-                      >
-                        {isInSeason && <Check className="w-3 h-3" />}
-                      </div>
-                      <span className="text-xs">{ing}</span>
-                    </div>
-                    {isInSeason && (
-                      <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold shrink-0">
-                        In Season
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+      {recipe.description && (
+        <div className="space-y-3">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Recipe</h3>
+          <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap">
+            {recipe.description}
+          </p>
+        </div>
+      )}
 
-        {recipe.description && (
-          <div className={ingredientLines.length > 0 ? "lg:col-span-3 space-y-3" : "lg:col-span-5 space-y-3"}>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Recipe</h3>
-            <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap">
-              {recipe.description}
-            </p>
+      {ingredientLines.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+            Ingredients
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+            {produce.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
+                  Produce
+                </h4>
+                {produce.map((line, i) => (
+                  <IngredientRow
+                    key={i}
+                    line={line}
+                    inSeason={matches.length > 0 && inList(matches, line)}
+                  />
+                ))}
+              </div>
+            )}
+            {pantry.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  {produce.length > 0 ? "Pantry" : "Ingredients"}
+                </h4>
+                {pantry.map((line, i) => (
+                  <IngredientRow key={i} line={line} inSeason={false} />
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
