@@ -55,20 +55,29 @@ still no linter or JS test suite.
    `save_recipes_cache`). It returns `unanalyzed_count` (recipes with no
    `key_ingredients`), which drives the "N new recipes detected / Sync Now"
    banner. Launch never calls Claude for recipe analysis.
-2. `analyze_new_recipes` — the "Sync Now" button. Sends every recipe matching
-   `needs_analysis` to Claude in batches of `ANALYSIS_BATCH` (25), asking for
-   two things per recipe: the 2-4 ingredients that define the dish, ranked
-   most-defining first (so asparagus in an asparagus-and-tofu stir fry
-   outranks a spring onion garnish), and the *line numbers* of the fresh
-   produce ingredients. The prompt numbers the ingredient lines and the
-   answer refers to them by index (`id: X — key: a, b — produce: 0, 3`),
-   because an index can't silently reword a line the way echoed text can;
-   `parse_key_ingredient_lines` skips unparseable lines rather than failing
-   the batch, and tolerates a missing `produce:` section. Results are saved
-   after *each* batch, so a failure or cancel keeps the work already done and
-   the next run re-derives what's left. This is the only place recipe
-   analysis happens.
-3. `match_recipes` — **no Claude call.** Scores cached recipes locally
+2. `analyze_new_recipes` — the "Sync Now" button. Sends every cached recipe
+   with empty `key_ingredients` to Claude in a *single* batched call
+   (`build_key_ingredient_prompt`), asking for the 2-4 ingredients that
+   define each dish, ranked most-defining first — so asparagus in an
+   asparagus-and-tofu stir fry outranks a spring onion garnish. Parses the
+   `id: X — key: a, b, c` lines (`parse_key_ingredient_lines`, skipping
+   unparseable ones rather than failing the batch) and writes the results
+   back into `recipes.json`. This is the only place recipe analysis happens.
+3. `build_pantry` / `list_pantry` / `set_pantry_item` — the produce/pantry
+   split. `build_pantry` runs **once**, when `pantry.json` is missing: it
+   reduces every ingredient line in the collection to a bare item name
+   (`ingredient_name` strips quantities, units, prep words and trailing
+   clauses, so "2 large cloves garlic, minced" and "1 garlic clove" both
+   become "garlic"), then asks Claude in a single call which of those ~970
+   distinct names are cupboard staples. The result is stored as a flat list
+   in `pantry.json`. After that, categorising is a pure local set lookup —
+   adding a recipe costs no LLM call. Anything *not* in the set counts as
+   produce, so a new ingredient shows up rather than being silently hidden,
+   and `set_pantry_item` (the per-row "move to pantry" / "confirm as
+   produce" menu) is the only thing that ever changes the set. There is
+   deliberately no periodic re-analysis: hand corrections are the update
+   mechanism.
+4. `match_recipes` — **no Claude call.** Scores cached recipes locally
    against the week's produce with `score_recipe`: a hit on the first key
    ingredient is worth 4, the second 3, and so on (floored at 1), so
    recipes *built around* in-season produce outrank ones that merely
@@ -83,7 +92,7 @@ still no linter or JS test suite.
    ("potato" != "sweet potato", "broccoli" != "broccolini"). Plain
    substring matching was the original rule and would rank a corned beef
    recipe as seasonal when corn is in season.
-4. `list_recipes` — returns the full local `recipes.json` as-is, for the
+5. `list_recipes` — returns the full local `recipes.json` as-is, for the
    frontend's "Saved Recipes" browse view (independent of any ranking).
 
 Only analysed recipes can ever match, since scoring reads `key_ingredients`
@@ -127,15 +136,13 @@ selected. `match_recipes` returns each ranked recipe flattened with its full
 record plus `score`/`matches`, so the detail pane needs no merging — it
 falls back to the Saved Recipes list only for recipes that never matched.
 `RecipeDetail.jsx` shows the stored `key_ingredients` as a "Built around"
-row, then the recipe text, then the ingredients below it split into Produce
-and Pantry columns. That split comes from `produce_lines` (indices into
-`ingredient_lines()`), so pantry is simply "every line not labelled
-produce" — the two columns always partition the real lines with nothing
-dropped or duplicated. `ingredientLinesOf` in `RecipeDetail.jsx` must stay
-in step with `ingredient_lines()` in `lib.rs` or the indices shift. Mela's
-`# SECTION` header lines are filtered out of both columns in the frontend
-rather than by Claude, since the `#` marker is reliable.
-`ArticleView.jsx` is a sanitized
+row, then the recipe text, then the ingredients below it in Produce and
+Pantry columns. It reimplements `ingredient_name` as `ingredientName` in JS
+to look each row up in the pantry set — the two must stay in step or a hand
+override silently never matches, so only the *ends* of a token are trimmed
+of punctuation (a blanket strip turns "jalapeños" into "jalapeo"). Mela's
+`# SECTION` header lines are dropped in the frontend rather than by Claude,
+since the `#` marker is reliable. `ArticleView.jsx` is a sanitized
 in-app reader for the full newsletter post (`sanitizeArticle` strips
 scripts/styles/forms/dangerous attributes), toggled in place of the detail
 pane; external links inside it route through `open_url` to the system
