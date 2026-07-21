@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { Leaf, Loader2, XCircle } from "lucide-react";
 import Sidebar from "./components/Sidebar.jsx";
-import RecipeList, { parseSuggestionLine } from "./components/RecipeList.jsx";
+import RecipeList from "./components/RecipeList.jsx";
 import RecipeDetail from "./components/RecipeDetail.jsx";
 import ArticleView from "./components/ArticleView.jsx";
 
@@ -21,18 +21,16 @@ export default function App() {
   const [produce, setProduce] = useState({ fruit: [], vegetable: [], pick: [], featured: [] });
   const [recipeCount, setRecipeCount] = useState(0);
 
-  const [rankedLines, setRankedLines] = useState([]); // raw suggestion-line strings, in order
+  const [rankedRecipes, setRankedRecipes] = useState([]); // scored locally by key ingredients
   const [allRecipes, setAllRecipes] = useState([]); // full local recipes.json, for "Saved Recipes"
   const [activeRecipeId, setActiveRecipeId] = useState(null);
+  const [unanalyzedCount, setUnanalyzedCount] = useState(0);
 
   // Launch-time sync: fetch cached-or-fresh produce, resync recipes.json from Mela.
   useEffect(() => {
     const unlistenPromises = [
       listen("status", (e) => setStatus(e.payload)),
       listen("produce", (e) => setProduce(e.payload)),
-      listen("suggestion-line", (e) =>
-        setRankedLines((lines) => [...lines, e.payload]),
-      ),
     ];
 
     setBusy(true);
@@ -43,6 +41,7 @@ export default function App() {
         setFeedHtml(result.produce.feed_html);
         setProduce(result.produce);
         setRecipeCount(result.recipe_count);
+        setUnanalyzedCount(result.unanalyzed_count);
         return invoke("list_recipes");
       })
       .then((recipes) => setAllRecipes(recipes ?? []))
@@ -54,32 +53,48 @@ export default function App() {
     };
   }, []);
 
-  const parsedRecipes = useMemo(() => rankedLines.map(parseSuggestionLine), [rankedLines]);
-  const recipesById = useMemo(() => {
-    const map = new Map();
-    for (const r of allRecipes) map.set(r.id, r);
-    return map;
-  }, [allRecipes]);
+  // Matching is local set-intersection now, not a Claude call, so it's
+  // cheap enough to just re-run whenever the produce list or the analysed
+  // recipe set changes — no "Match Recipes" button.
+  useEffect(() => {
+    if (produce.fruit.length || produce.vegetable.length) runMatch();
+  }, [produce, allRecipes]);
 
-  // A selected recipe may come from the ranked list (has matches/fit but no
-  // description/ingredients unless also present in recipes.json) or from
-  // the full Saved Recipes list (has description/ingredients but no
-  // ranking). Merge both views by id so RecipeDetail always gets whichever
-  // fields are available.
+  // Ranked recipes already carry their full record from the backend, so a
+  // selection only needs the Saved Recipes list as a fallback for recipes
+  // that never matched.
   const activeRecipe = useMemo(() => {
-    const ranked = parsedRecipes.find((r) => r.id === activeRecipeId) || parsedRecipes[0] || null;
-    const id = activeRecipeId ?? ranked?.id;
-    const full = id ? recipesById.get(id) : undefined;
-    if (!ranked && !full) return null;
-    return { ...full, ...ranked };
-  }, [parsedRecipes, recipesById, activeRecipeId]);
+    const id = activeRecipeId ?? rankedRecipes[0]?.id;
+    if (!id) return null;
+    return (
+      rankedRecipes.find((r) => r.id === id) ||
+      allRecipes.find((r) => r.id === id) ||
+      null
+    );
+  }, [rankedRecipes, allRecipes, activeRecipeId]);
 
   async function runMatch() {
-    setBusy(true);
-    setRankedLines([]);
     setActiveRecipeId(null);
     try {
-      await invoke("match_recipes", { feedTitle, fruit: produce.fruit, vegetable: produce.vegetable });
+      setRankedRecipes(
+        await invoke("match_recipes", {
+          fruit: produce.fruit,
+          vegetable: produce.vegetable,
+        }),
+      );
+    } catch (err) {
+      setStatus(`Error: ${err}`);
+    }
+  }
+
+  // "Sync Now": run the Claude key-ingredient analysis over recipes the
+  // launch sync found unanalysed, then refresh the local list.
+  async function analyzeNew() {
+    setBusy(true);
+    try {
+      await invoke("analyze_new_recipes");
+      setAllRecipes((await invoke("list_recipes")) ?? []);
+      setUnanalyzedCount(0);
     } catch (err) {
       setStatus(err === "cancelled" ? "Cancelled." : `Error: ${err}`);
     } finally {
@@ -96,7 +111,7 @@ export default function App() {
       <Sidebar
         selectedNav={selectedNav}
         onSelectNav={setSelectedNav}
-        matchCount={parsedRecipes.length}
+        matchCount={rankedRecipes.length}
         produceCount={produce.fruit.length + produce.vegetable.length}
         recipeCount={recipeCount}
       />
@@ -106,11 +121,12 @@ export default function App() {
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         produce={produce}
-        rankedRecipes={parsedRecipes}
+        rankedRecipes={rankedRecipes}
         allRecipes={allRecipes}
         activeRecipeId={activeRecipe?.id}
         onSelectRecipe={setActiveRecipeId}
-        onMatch={runMatch}
+        unanalyzedCount={unanalyzedCount}
+        onSyncNow={analyzeNew}
         feedLink={feedLink}
         onOpenArticle={() => setShowArticle(true)}
       />

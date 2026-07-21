@@ -1,5 +1,6 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -28,6 +29,12 @@ struct Recipe {
     total_time: String,
     #[serde(default, rename = "yield")]
     yield_: String,
+    // Claude-analysed defining ingredients, most-defining first (asparagus
+    // before the spring onion garnish). Empty means "not analysed yet" —
+    // that's what analyze_new_recipes looks for. Never read from Mela;
+    // carried across every resync by merge_recipes.
+    #[serde(default)]
+    key_ingredients: Vec<String>,
 }
 
 fn mela_db_path() -> PathBuf {
@@ -65,6 +72,7 @@ fn load_recipes(db_path: &PathBuf) -> Result<Vec<Recipe>, String> {
                 favorite: row.get::<_, Option<i64>>(4)?.unwrap_or(0) == 1,
                 total_time: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
                 yield_: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+                key_ingredients: Vec::new(),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -156,7 +164,7 @@ fn build_produce_prompt(entry_title: &str, entry_text: &str) -> String {
     )
 }
 
-fn build_ranking_prompt(recipes: &[Recipe], produce: &[String], entry_title: &str) -> String {
+fn build_key_ingredient_prompt(recipes: &[Recipe]) -> String {
     let recipe_lines = recipes
         .iter()
         .map(|r| {
@@ -171,27 +179,83 @@ fn build_ranking_prompt(recipes: &[Recipe], produce: &[String], entry_title: &st
         .collect::<Vec<_>>()
         .join("\n");
 
-    let produce_list = produce.join(", ");
-
     format!(
-        "Here is a home cook's recipe collection (id, title, description,\n\
-        ingredients), already filtered to ones that plausibly use this week's\n\
-        in-season produce ({produce_list}) from the newsletter \"{entry_title}\":\n\n\
+        "Here are recipes from a home cook's collection (id, title, description,\n\
+        ingredients):\n\n\
         {recipe_lines}\n\n\
-        Rank these recipes from best fit to weakest fit against that produce list —\n\
-        do not group by produce item, order the whole list purely by how well each\n\
-        recipe matches what's in season right now. Only include genuine matches.\n\
-        Output each one as a single line in exactly this format:\n\n\
-        N. **Recipe Title** — id: RECIPE_ID — matches: ingredient, ingredient — fit: one-line reason"
+        For each recipe, identify the 2-4 ingredients that actually define the\n\
+        dish — the ones a shopper would build the meal around. Rank them\n\
+        most-defining first. In \"asparagus and tofu stir fry\" the key\n\
+        ingredients are asparagus and tofu; a spring onion garnish, oil,\n\
+        salt, and pantry staples are NOT key ingredients. Prefer fresh produce\n\
+        and proteins over seasonings and condiments. Use short singular\n\
+        ingredient names (\"asparagus\", not \"2 bunches trimmed asparagus\").\n\n\
+        Output one line per recipe, in exactly this format, nothing else:\n\n\
+        id: RECIPE_ID — key: ingredient, ingredient, ingredient"
     )
 }
 
-fn filter_recipes_by_produce<'a>(recipes: &'a [Recipe], produce: &[String]) -> Vec<&'a Recipe> {
-    recipes
+/// Parses the `id: X — key: a, b, c` lines back into (id, key_ingredients).
+/// Unparseable lines (stray commentary) are skipped rather than failing the
+/// whole batch — a recipe that misses out just stays unanalysed and gets
+/// picked up by the next sync.
+fn parse_key_ingredient_lines(answer: &str) -> Vec<(String, Vec<String>)> {
+    answer
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim().trim_start_matches('-').trim();
+            let rest = line.strip_prefix("id:")?;
+            let (id, keys) = rest.split_once("—").or_else(|| rest.split_once(" - "))?;
+            let keys = keys.trim().strip_prefix("key:")?;
+            let keys: Vec<String> = keys
+                .split(',')
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if keys.is_empty() {
+                return None;
+            }
+            Some((id.trim().to_string(), keys))
+        })
+        .collect()
+}
+
+/// Scores a recipe against this week's produce by how *defining* the
+/// matching ingredients are: the first key ingredient is worth the most,
+/// each subsequent one less. Recipes with no key-ingredient hit score 0 and
+/// are dropped by the caller.
+fn score_recipe(recipe: &Recipe, produce: &[String]) -> (u32, Vec<String>) {
+    let mut score = 0;
+    let mut matched = Vec::new();
+    for (i, key) in recipe.key_ingredients.iter().enumerate() {
+        if produce.iter().any(|p| {
+            let (p, key) = (p.to_lowercase(), key.to_lowercase());
+            p.contains(&key) || key.contains(&p)
+        }) {
+            // Rank 0 scores 4, rank 1 scores 3, ... floored at 1.
+            score += 4u32.saturating_sub(i as u32).max(1);
+            matched.push(key.clone());
+        }
+    }
+    (score, matched)
+}
+
+/// Carries analysed key_ingredients across a full Mela resync. `fresh` comes
+/// straight from SQLite with empty key_ingredients; anything already
+/// analysed in the old cache keeps its list, so only genuinely new recipes
+/// come out unanalysed.
+fn merge_recipes(fresh: Vec<Recipe>, cached: &[Recipe]) -> Vec<Recipe> {
+    let known: HashMap<&str, &Vec<String>> = cached
         .iter()
-        .filter(|r| {
-            let searchable = format!("{} {}", r.description, r.ingredients).to_lowercase();
-            produce.iter().any(|p| searchable.contains(&p.to_lowercase()))
+        .map(|r| (r.id.as_str(), &r.key_ingredients))
+        .collect();
+    fresh
+        .into_iter()
+        .map(|mut r| {
+            if let Some(keys) = known.get(r.id.as_str()) {
+                r.key_ingredients = (*keys).clone();
+            }
+            r
         })
         .collect()
 }
@@ -375,6 +439,9 @@ struct SyncResult {
     produce: ProduceResult,
     produce_from_cache: bool,
     recipe_count: usize,
+    /// Recipes in the cache with no key_ingredients yet — what the "Sync
+    /// Now" button offers to analyse.
+    unanalyzed_count: usize,
 }
 
 /// Runs on app launch: refreshes the produce cache only if the newsletter
@@ -438,67 +505,123 @@ async fn sync_on_launch(
     );
 
     let _ = app.emit("status", "Syncing recipes from Mela...");
-    let recipes = load_recipes(&mela_db_path())?;
-    if recipes.is_empty() {
+    let fresh = load_recipes(&mela_db_path())?;
+    if fresh.is_empty() {
         return Err(format!("No recipes found in {}", mela_db_path().display()));
     }
+    let cached = load_recipes_cache(&app).unwrap_or_default();
+    let recipes = merge_recipes(fresh, &cached);
     save_recipes_cache(&app, &recipes)?;
 
-    let _ = app.emit("status", "Done.");
+    let unanalyzed_count = recipes
+        .iter()
+        .filter(|r| r.key_ingredients.is_empty())
+        .count();
+
+    let _ = app.emit(
+        "status",
+        if unanalyzed_count > 0 {
+            format!("{unanalyzed_count} new recipes detected.")
+        } else {
+            "Done.".to_string()
+        },
+    );
     Ok(SyncResult {
         produce,
         produce_from_cache,
         recipe_count: recipes.len(),
+        unanalyzed_count,
     })
 }
 
-#[derive(Serialize, Clone)]
-struct MatchResult {
-    recipe_count: usize,
-    candidate_count: usize,
-}
-
+/// Analyses every cached recipe that has no key_ingredients yet, in one
+/// Claude call, and writes the results back into recipes.json. Triggered by
+/// the "Sync Now" button, not on launch.
 #[tauri::command]
-async fn match_recipes(
+async fn analyze_new_recipes(
     app: tauri::AppHandle,
     running: State<'_, RunningChild>,
-    feed_title: String,
+) -> Result<usize, String> {
+    let mut recipes = load_recipes_cache(&app)
+        .ok_or_else(|| "No cached recipes — sync hasn't run yet".to_string())?;
+    let pending: Vec<Recipe> = recipes
+        .iter()
+        .filter(|r| r.key_ingredients.is_empty())
+        .cloned()
+        .collect();
+    if pending.is_empty() {
+        return Ok(0);
+    }
+
+    let _ = app.emit(
+        "status",
+        format!("Analysing {} new recipes...", pending.len()),
+    );
+    let answer = run_claude(&build_key_ingredient_prompt(&pending), &running, |_| {})?;
+    let parsed: HashMap<String, Vec<String>> =
+        parse_key_ingredient_lines(&answer).into_iter().collect();
+    if parsed.is_empty() {
+        return Err("Claude returned no usable key ingredients".to_string());
+    }
+
+    let mut analyzed = 0;
+    for recipe in recipes.iter_mut() {
+        if let Some(keys) = parsed.get(&recipe.id) {
+            recipe.key_ingredients = keys.clone();
+            analyzed += 1;
+        }
+    }
+    save_recipes_cache(&app, &recipes)?;
+
+    let _ = app.emit("status", format!("Analysed {analyzed} recipes."));
+    Ok(analyzed)
+}
+
+#[derive(Serialize, Clone)]
+struct RankedRecipe {
+    #[serde(flatten)]
+    recipe: Recipe,
+    score: u32,
+    matches: Vec<String>,
+}
+
+/// Ranks cached recipes against this week's produce using the stored
+/// key_ingredients — no Claude call, so this is instant and offline. Only
+/// analysed recipes can match; unanalysed ones score 0 until "Sync Now"
+/// runs.
+#[tauri::command]
+fn match_recipes(
+    app: tauri::AppHandle,
     fruit: Vec<String>,
     vegetable: Vec<String>,
-) -> Result<MatchResult, String> {
+) -> Result<Vec<RankedRecipe>, String> {
     let produce: Vec<String> = fruit.into_iter().chain(vegetable).collect();
-    let _ = app.emit("status", "Loading recipes...");
     let recipes = load_recipes_cache(&app)
         .ok_or_else(|| "No cached recipes — sync hasn't run yet".to_string())?;
     if recipes.is_empty() {
         return Err("No recipes found in the local cache".to_string());
     }
-    let _ = app.emit("status", format!("Loaded {} recipes", recipes.len()));
 
-    let candidates = filter_recipes_by_produce(&recipes, &produce);
-    if candidates.is_empty() {
-        return Err("No recipes match this week's produce".to_string());
-    }
-    let _ = app.emit(
-        "status",
-        format!(
-            "Ranking {} matching recipes (of {})...",
-            candidates.len(),
-            recipes.len()
-        ),
-    );
+    let mut ranked: Vec<RankedRecipe> = recipes
+        .into_iter()
+        .filter_map(|r| {
+            let (score, matches) = score_recipe(&r, &produce);
+            (score > 0).then(|| RankedRecipe {
+                recipe: r,
+                score,
+                matches,
+            })
+        })
+        .collect();
+    // Highest score first, ties broken by title so the order is stable.
+    ranked.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.recipe.title.cmp(&b.recipe.title))
+    });
 
-    let candidate_recipes: Vec<Recipe> = candidates.into_iter().cloned().collect();
-    let ranking_prompt = build_ranking_prompt(&candidate_recipes, &produce, &feed_title);
-    run_claude(&ranking_prompt, &running, |line| {
-        let _ = app.emit("suggestion-line", line);
-    })?;
-
-    let _ = app.emit("status", "Done.");
-    Ok(MatchResult {
-        recipe_count: recipes.len(),
-        candidate_count: candidate_recipes.len(),
-    })
+    let _ = app.emit("status", format!("{} recipes match.", ranked.len()));
+    Ok(ranked)
 }
 
 #[tauri::command]
@@ -571,6 +694,7 @@ mod tests {
             favorite: true,
             total_time: "25min".into(),
             yield_: "2".into(),
+            key_ingredients: vec!["figs".into()],
         }];
         let json = serde_json::to_string(&recipes).unwrap();
         let parsed: Vec<Recipe> = serde_json::from_str(&json).unwrap();
@@ -580,6 +704,75 @@ mod tests {
         assert!(parsed[0].favorite);
         assert_eq!(parsed[0].total_time, "25min");
         assert_eq!(parsed[0].yield_, "2");
+        assert_eq!(parsed[0].key_ingredients, vec!["figs".to_string()]);
+    }
+
+    fn recipe(id: &str, title: &str, keys: &[&str]) -> Recipe {
+        Recipe {
+            id: id.into(),
+            title: title.into(),
+            description: String::new(),
+            ingredients: String::new(),
+            favorite: false,
+            total_time: String::new(),
+            yield_: String::new(),
+            key_ingredients: keys.iter().map(|k| k.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn parses_key_ingredient_lines_and_skips_commentary() {
+        let answer = "Here are the results:\n\
+                      id: abc — key: Asparagus, Tofu\n\
+                      - id: def — key: fig, goat cheese\n\
+                      that's everything!";
+        let parsed = parse_key_ingredient_lines(answer);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].0, "abc");
+        // Lowercased so scoring can compare against produce names directly.
+        assert_eq!(parsed[0].1, vec!["asparagus", "tofu"]);
+        assert_eq!(parsed[1].0, "def");
+    }
+
+    // The whole point of the redesign: a recipe built around in-season
+    // produce must outrank one that merely garnishes with it.
+    #[test]
+    fn defining_ingredient_outranks_garnish() {
+        let produce = vec!["asparagus".to_string()];
+        let star = recipe("a", "Asparagus Stir Fry", &["asparagus", "tofu"]);
+        let garnish = recipe("b", "Beef Pie", &["beef", "pastry", "asparagus"]);
+        let (star_score, matches) = score_recipe(&star, &produce);
+        let (garnish_score, _) = score_recipe(&garnish, &produce);
+        assert!(star_score > garnish_score);
+        assert_eq!(matches, vec!["asparagus"]);
+    }
+
+    #[test]
+    fn recipe_with_no_matching_key_ingredient_scores_zero() {
+        let (score, matches) = score_recipe(
+            &recipe("a", "Beef Pie", &["beef", "pastry"]),
+            &["asparagus".to_string()],
+        );
+        assert_eq!(score, 0);
+        assert!(matches.is_empty());
+    }
+
+    // A resync must not wipe analysis: known ids keep their key ingredients,
+    // genuinely new ones come out empty so "Sync Now" picks them up.
+    #[test]
+    fn merge_preserves_analysis_and_leaves_new_recipes_unanalysed() {
+        let cached = vec![recipe("a", "Asparagus Stir Fry", &["asparagus", "tofu"])];
+        let fresh = vec![
+            recipe("a", "Asparagus Stir Fry", &[]),
+            recipe("b", "Brand New Recipe", &[]),
+        ];
+        let merged = merge_recipes(fresh, &cached);
+        assert_eq!(merged[0].key_ingredients, vec!["asparagus", "tofu"]);
+        assert!(merged[1].key_ingredients.is_empty());
+        assert_eq!(
+            merged.iter().filter(|r| r.key_ingredients.is_empty()).count(),
+            1
+        );
     }
 
     // A recipes.json written before favorite/total_time/yield existed must
@@ -620,6 +813,7 @@ pub fn run() {
         .manage(RunningChild::default())
         .invoke_handler(tauri::generate_handler![
             sync_on_launch,
+            analyze_new_recipes,
             match_recipes,
             list_recipes,
             cancel,

@@ -47,7 +47,23 @@ export default function RecipeDetail({ recipe }) {
         </button>
       </div>
 
-      {recipe.fit && <p className="text-sm text-slate-600">{recipe.fit}</p>}
+      {recipe.key_ingredients?.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] uppercase tracking-wider text-slate-400">Built around</span>
+          {recipe.key_ingredients.map((ing) => (
+            <span
+              key={ing}
+              className={`text-[11px] px-2 py-0.5 rounded ${
+                inList(matches, ing)
+                  ? "bg-emerald-100 text-emerald-700 font-medium"
+                  : "bg-slate-100 text-slate-600"
+              }`}
+            >
+              {ing}
+            </span>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {ingredientLines.length > 0 && (

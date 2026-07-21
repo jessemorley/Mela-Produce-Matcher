@@ -1,29 +1,7 @@
 import { useState } from "react";
-import { Search, Check, Sparkles, Heart, Clock } from "lucide-react";
+import { Search, Check, RefreshCw, Heart, Clock } from "lucide-react";
 
 const { invoke } = window.__TAURI__.core;
-
-// N. **Recipe Title** — id: RECIPE_ID — matches: ingredient, ingredient — fit: reason
-const LINE_RE = /^(\d+)\.\s+\*\*(.+?)\*\*\s+—\s+id:\s+(\S+)\s+—\s+matches:\s+(.*?)\s+—\s+fit:\s+(.+)$/;
-
-// Parses one streamed suggestion-line into a display-ready recipe. Lines
-// that don't match the expected shape (stray commentary from Claude) still
-// render, just without structure — same fallback the old plain-JS UI used.
-export function parseSuggestionLine(line) {
-  const match = line.match(LINE_RE);
-  if (!match) {
-    return { id: line, title: line, matches: [], fit: "", raw: true };
-  }
-  const [, rank, title, id, matchesStr, fit] = match;
-  return {
-    id,
-    rank: Number(rank),
-    title,
-    matches: matchesStr.split(",").map((s) => s.trim()).filter(Boolean),
-    fit,
-    raw: false,
-  };
-}
 
 // Produce names come dynamically from Claude reading the live newsletter,
 // so they won't reliably match a small hand-picked name→emoji table (the
@@ -51,24 +29,36 @@ function inList(list, name) {
   });
 }
 
-function MatchingView({ rankedRecipes, activeRecipeId, onSelectRecipe, searchQuery, onMatch }) {
+function MatchingView({
+  rankedRecipes,
+  activeRecipeId,
+  onSelectRecipe,
+  searchQuery,
+  unanalyzedCount,
+  onSyncNow,
+}) {
   const filtered = rankedRecipes.filter((r) =>
     r.title.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   return (
     <div className="flex-1 overflow-y-auto flex flex-col">
-      <div className="p-3">
-        <button
-          onClick={onMatch}
-          className="w-full flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-all"
-        >
-          <Sparkles className="w-3.5 h-3.5" />
-          Match Recipes
-        </button>
-      </div>
+      {unanalyzedCount > 0 && (
+        <div className="p-3 flex items-center justify-between gap-2 bg-amber-50 border-b border-amber-100">
+          <span className="text-[11px] text-amber-800">
+            {unanalyzedCount} new {unanalyzedCount === 1 ? "recipe" : "recipes"} detected
+          </span>
+          <button
+            onClick={onSyncNow}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-all"
+          >
+            <RefreshCw className="w-3 h-3" />
+            Sync Now
+          </button>
+        </div>
+      )}
       <div className="divide-y divide-slate-100">
-        {filtered.map((rec) => (
+        {filtered.map((rec, i) => (
           <div
             key={rec.id}
             onClick={() => onSelectRecipe(rec.id)}
@@ -79,17 +69,14 @@ function MatchingView({ rankedRecipes, activeRecipeId, onSelectRecipe, searchQue
             }`}
           >
             <div className="flex justify-between items-start mb-1.5">
-              {rec.rank && (
-                <span className="text-[10px] font-semibold text-slate-400">#{rec.rank}</span>
-              )}
+              <span className="text-[10px] font-semibold text-slate-400">#{i + 1}</span>
             </div>
             <h3 className="text-xs font-bold text-slate-900 leading-tight mb-1">{rec.title}</h3>
-            {rec.fit && <p className="text-[10px] text-slate-500 mb-1.5">{rec.fit}</p>}
             <div className="flex flex-wrap gap-1">
               {rec.matches.map((ing) => (
                 <span
                   key={ing}
-                  className="text-[9px] bg-slate-100 px-1.5 py-0.5 rounded text-slate-600"
+                  className="text-[9px] bg-emerald-50 px-1.5 py-0.5 rounded text-emerald-700"
                 >
                   <Check className="w-2.5 h-2.5 inline -mt-px mr-0.5" />
                   {ing}
@@ -100,7 +87,9 @@ function MatchingView({ rankedRecipes, activeRecipeId, onSelectRecipe, searchQue
         ))}
         {filtered.length === 0 && (
           <p className="p-3.5 text-xs text-slate-400">
-            No matches yet — click "Match Recipes" above.
+            {unanalyzedCount > 0
+              ? "No matches yet — click \"Sync Now\" to analyse your recipes."
+              : "Nothing in your collection matches this week's produce."}
           </p>
         )}
       </div>
@@ -223,7 +212,8 @@ export default function RecipeList({
   allRecipes,
   activeRecipeId,
   onSelectRecipe,
-  onMatch,
+  unanalyzedCount,
+  onSyncNow,
   feedLink,
   onOpenArticle,
 }) {
@@ -257,7 +247,8 @@ export default function RecipeList({
           activeRecipeId={activeRecipeId}
           onSelectRecipe={onSelectRecipe}
           searchQuery={searchQuery}
-          onMatch={onMatch}
+          unanalyzedCount={unanalyzedCount}
+          onSyncNow={onSyncNow}
         />
       )}
       {selectedNav === "produce" && <ProduceView produce={produce} searchQuery={searchQuery} />}
