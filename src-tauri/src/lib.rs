@@ -220,6 +220,52 @@ fn parse_key_ingredient_lines(answer: &str) -> Vec<(String, Vec<String>)> {
         .collect()
 }
 
+/// Strips a trailing plural so "potatoes" and "potato" compare equal.
+/// Handles the regular -s/-es cases only; "es" is kept when dropping just
+/// the "s" already leaves a word (so "peas" -> "pea", but "tomatoes" ->
+/// "tomato").
+fn singular(word: &str) -> &str {
+    if let Some(stem) = word.strip_suffix("es") {
+        // "tomatoes"/"potatoes" drop the full "es"; "limes"/"grapes" only
+        // the "s", which the strip_suffix('s') arm below handles.
+        if stem.ends_with('o') || stem.ends_with("ch") || stem.ends_with("sh") {
+            return stem;
+        }
+    }
+    word.strip_suffix('s').unwrap_or(word)
+}
+
+/// True if a produce name and a recipe's key ingredient name the same
+/// ingredient. Both are split into plural-normalised words and compared
+/// from the front, so one may *extend* the other with trailing words but
+/// neither may add a leading qualifier:
+///
+/// - "sugar snap" == "sugar snap peas"  (the feed abbreviates, recipes don't)
+/// - "corn"       != "corned beef"      (mid-word, not a word at all)
+/// - "potato"     != "sweet potato"     (leading qualifier: different thing)
+///
+/// ponytail: comparing head words, not substrings and not full equality.
+/// A leading qualifier makes a different ingredient with a different season
+/// ("broccoli"/"broccolini", "potato"/"sweet potato", "broccoli"/"chinese
+/// broccoli"), which is intended behaviour rather than a gap to fill. The
+/// known soft spot is the mirror case — "apple" also matches "apple cider
+/// vinegar" — which needs a stop-list of non-produce heads only if a recipe
+/// ever ranks on one. Irregular plurals (leaf/leaves) and synonyms
+/// (capsicum/bell pepper, beetroot/beets) stay out of scope until the
+/// newsletter publishes names this misses.
+fn produce_matches(produce: &str, key: &str) -> bool {
+    let normalise = |s: &str| {
+        s.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| !w.is_empty())
+            .map(|w| singular(w).to_string())
+            .collect::<Vec<_>>()
+    };
+    let (produce, key) = (normalise(produce), normalise(key));
+    let shared = produce.len().min(key.len());
+    shared > 0 && produce[..shared] == key[..shared]
+}
+
 /// Scores a recipe against this week's produce by how *defining* the
 /// matching ingredients are: the first key ingredient is worth the most,
 /// each subsequent one less. Recipes with no key-ingredient hit score 0 and
@@ -228,10 +274,7 @@ fn score_recipe(recipe: &Recipe, produce: &[String]) -> (u32, Vec<String>) {
     let mut score = 0;
     let mut matched = Vec::new();
     for (i, key) in recipe.key_ingredients.iter().enumerate() {
-        if produce.iter().any(|p| {
-            let (p, key) = (p.to_lowercase(), key.to_lowercase());
-            p.contains(&key) || key.contains(&p)
-        }) {
+        if produce.iter().any(|p| produce_matches(p, key)) {
             // Rank 0 scores 4, rank 1 scores 3, ... floored at 1.
             score += 4u32.saturating_sub(i as u32).max(1);
             matched.push(key.clone());
@@ -745,6 +788,64 @@ mod tests {
         let (garnish_score, _) = score_recipe(&garnish, &produce);
         assert!(star_score > garnish_score);
         assert_eq!(matches, vec!["asparagus"]);
+    }
+
+    // The whole point of matching on word boundaries: a short produce name
+    // must not match a longer unrelated ingredient that merely starts with
+    // it. "corn" vs "corned beef" is the case that motivated the rule.
+    #[test]
+    fn produce_matches_on_word_boundaries_not_substrings() {
+        // Same ingredient, including plurals and multi-word names.
+        assert!(produce_matches("corn", "corn"));
+        assert!(produce_matches("potato", "potatoes"));
+        assert!(produce_matches("beetroot", "beetroots"));
+        assert!(produce_matches("Apple", "apples")); // case-insensitive
+        assert!(produce_matches("snow pea", "snow peas"));
+        assert!(produce_matches("brussels sprout", "brussels sprouts"));
+
+        // Different ingredient that merely shares a prefix.
+        assert!(!produce_matches("corn", "corned beef"));
+        assert!(!produce_matches("corn", "cornflour"));
+        assert!(!produce_matches("pea", "peanut butter"));
+        assert!(!produce_matches("lime", "limeade"));
+        assert!(!produce_matches("orange", "oregano"));
+    }
+
+    // The feed abbreviates where recipes are explicit, so a trailing noun
+    // must not break the match — but a *leading* qualifier names a
+    // different ingredient. This asymmetry is the whole rule.
+    #[test]
+    fn trailing_words_extend_a_name_but_leading_words_change_it() {
+        assert!(produce_matches("sugar snap", "sugar snap peas"));
+        assert!(produce_matches("brussels sprout", "brussels sprouts"));
+
+        assert!(!produce_matches("corn", "sweet corn"));
+        assert!(!produce_matches("broccoli", "chinese broccoli"));
+
+        // ponytail: known soft spot — a trailing extension that is not the
+        // same ingredient. Harmless while no recipe ranks on it; if one
+        // does, this is the assertion to flip.
+        assert!(produce_matches("apple", "apple cider vinegar"));
+    }
+
+    // Synonyms are out of scope for equality matching. Pinned so the
+    // limitation is visible rather than discovered as a silent miss.
+    #[test]
+    fn synonyms_do_not_match_without_an_alias_table() {
+        assert!(!produce_matches("beetroot", "beets"));
+        assert!(!produce_matches("capsicum", "bell pepper"));
+    }
+
+    // Varietals are separate ingredients with separate seasons, so these
+    // stay unmatched on purpose — see the ponytail comment on
+    // produce_matches before "fixing" either of them.
+    #[test]
+    fn varietals_are_distinct_ingredients() {
+        assert!(!produce_matches("broccoli", "broccolini"));
+        assert!(!produce_matches("potato", "sweet potato"));
+        // ...but the plain forms still match their own plurals.
+        assert!(produce_matches("broccoli", "broccoli"));
+        assert!(produce_matches("sweet potato", "sweet potatoes"));
     }
 
     #[test]

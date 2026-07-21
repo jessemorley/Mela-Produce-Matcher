@@ -70,7 +70,14 @@ still no linter or JS test suite.
    garnish with it. Recipes scoring 0 are dropped; ties break on title for
    a stable order. Instant and offline, so `App.jsx` just re-runs it in an
    effect whenever produce or the recipe list changes — there's no "Match
-   Recipes" button.
+   Recipes" button. Produce names and key ingredients are compared by
+   `produce_matches`, which splits both into plural-normalised words and
+   compares them *from the front*: a trailing noun extends a name
+   ("sugar snap" == "sugar snap peas", since the feed abbreviates where
+   recipes don't) but a leading qualifier makes a different ingredient
+   ("potato" != "sweet potato", "broccoli" != "broccolini"). Plain
+   substring matching was the original rule and would rank a corned beef
+   recipe as seasonal when corn is in season.
 4. `list_recipes` — returns the full local `recipes.json` as-is, for the
    frontend's "Saved Recipes" browse view (independent of any ranking).
 
