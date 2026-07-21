@@ -43,10 +43,11 @@ export default function App() {
         setProduce(result.produce);
         setRecipeCount(result.recipe_count);
         setUnanalyzedCount(result.unanalyzed_count);
-        // The pantry is a one-off Claude call over the whole ingredient
-        // vocabulary; after that it's a local lookup corrected by hand.
-        if (result.pantry_needed) invoke("build_pantry").then(loadPantry).catch(() => {});
-        else loadPantry();
+        // The pantry set ships with the app, so this is only ever a read —
+        // nothing calls build_pantry on launch. Unknown ingredients default
+        // to produce, which is right for almost all of them, and the
+        // per-row override fixes the rest permanently.
+        loadPantry();
         return invoke("list_recipes");
       })
       .then((recipes) => setAllRecipes(recipes ?? []))

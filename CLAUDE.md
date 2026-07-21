@@ -64,19 +64,24 @@ still no linter or JS test suite.
    unparseable ones rather than failing the batch) and writes the results
    back into `recipes.json`. This is the only place recipe analysis happens.
 3. `build_pantry` / `list_pantry` / `set_pantry_item` — the produce/pantry
-   split. `build_pantry` runs **once**, when `pantry.json` is missing: it
-   reduces every ingredient line in the collection to a bare item name
-   (`ingredient_name` strips quantities, units, prep words and trailing
-   clauses, so "2 large cloves garlic, minced" and "1 garlic clove" both
-   become "garlic"), then asks Claude in a single call which of those ~970
-   distinct names are cupboard staples. The result is stored as a flat list
-   in `pantry.json`. After that, categorising is a pure local set lookup —
-   adding a recipe costs no LLM call. Anything *not* in the set counts as
-   produce, so a new ingredient shows up rather than being silently hidden,
-   and `set_pantry_item` (the per-row "move to pantry" / "confirm as
-   produce" menu) is the only thing that ever changes the set. There is
-   deliberately no periodic re-analysis: hand corrections are the update
-   mechanism.
+   split, which costs **no LLM call in normal use**. The staple list ships
+   with the app as `src/pantry_defaults.txt` (546 names, compiled in via
+   `include_str!`), generated once by running `build_pantry_prompt` over
+   this collection's 915 distinct ingredient names. Categorising is then a
+   set lookup: `ingredient_name` reduces a raw line to the item it names
+   (stripping quantities, units, prep words and trailing clauses, so "2
+   large cloves garlic, minced" and "1 garlic clove" both become "garlic"),
+   and a hit means pantry. Anything *not* in the set is produce — right for
+   nearly all unknowns, since produce is the open-ended category, and it
+   fails visibly rather than hiding a vegetable. `set_pantry_item` (the
+   per-row "move to pantry" / "confirm as produce" menu) writes
+   `pantry.json`, which then supersedes the defaults wholesale.
+   `build_pantry` still exists for a collection the defaults genuinely
+   don't fit — it classifies only the names not already covered and merges
+   them in — but **nothing calls it automatically**: on this collection 369
+   names are "unclassified" and almost all are real produce (apple,
+   asparagus, avocado), so running it would spend a call confirming what
+   the default already got right.
 4. `match_recipes` — **no Claude call.** Scores cached recipes locally
    against the week's produce with `score_recipe`: a hit on the first key
    ingredient is worth 4, the second 3, and so on (floored at 1), so
