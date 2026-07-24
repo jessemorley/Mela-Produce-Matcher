@@ -77,26 +77,35 @@ function MatchingView({
           <div
             key={rec.id}
             onClick={() => onSelectRecipe(rec.id)}
-            className={`p-3.5 cursor-pointer transition-all ${
+            className={`p-3.5 flex gap-3 cursor-pointer transition-all ${
               activeRecipeId === rec.id
                 ? "bg-slate-100 border-l-2 border-emerald-500"
                 : "hover:bg-slate-50"
             }`}
           >
-            <div className="flex justify-between items-start mb-1.5">
-              <span className="text-[10px] font-semibold text-slate-400">#{i + 1}</span>
-            </div>
-            <h3 className="text-xs font-bold text-slate-900 leading-tight mb-1">{rec.title}</h3>
-            <div className="flex flex-wrap gap-1">
-              {rec.matches.map((ing) => (
-                <span
-                  key={ing}
-                  className="text-[9px] bg-emerald-50 px-1.5 py-0.5 rounded text-emerald-700"
-                >
-                  <Check className="w-2.5 h-2.5 inline -mt-px mr-0.5" />
-                  {ing}
-                </span>
-              ))}
+            {rec.image && (
+              <img
+                src={rec.image}
+                alt=""
+                className="w-14 h-14 shrink-0 rounded-lg object-cover"
+              />
+            )}
+            <div className="min-w-0">
+              <div className="flex justify-between items-start mb-1.5">
+                <span className="text-[10px] font-semibold text-slate-400">#{i + 1}</span>
+              </div>
+              <h3 className="text-xs font-bold text-slate-900 leading-tight mb-1">{rec.title}</h3>
+              <div className="flex flex-wrap gap-1">
+                {rec.matches.map((ing) => (
+                  <span
+                    key={ing}
+                    className="text-[9px] bg-emerald-50 px-1.5 py-0.5 rounded text-emerald-700"
+                  >
+                    <Check className="w-2.5 h-2.5 inline -mt-px mr-0.5" />
+                    {ing}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
         ))}
