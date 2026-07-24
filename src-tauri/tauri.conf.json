@@ -14,8 +14,8 @@
     "windows": [
       {
         "title": "Seasonal Recipes",
-        "width": 900,
-        "height": 640,
+        "width": 1280,
+        "height": 800,
         "minWidth": 640,
         "minHeight": 480,
         "titleBarStyle": "Overlay",
