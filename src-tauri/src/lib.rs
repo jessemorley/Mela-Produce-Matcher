@@ -306,6 +306,22 @@ fn singular(word: &str) -> &str {
     word.strip_suffix('s').unwrap_or(word)
 }
 
+/// Trailing words that turn a produce head into a manufactured/derived
+/// product rather than a form of the vegetable/fruit itself — "corn" is
+/// produce, "corn tortillas" is a pantry staple made from corn. Extends the
+/// trailing-noun rule below: a trailing noun normally means the *same*
+/// ingredient stated more specifically ("sugar snap" -> "sugar snap peas"),
+/// but these particular nouns mean a different, processed product instead.
+/// ponytail: the known soft spot named in produce_matches' doc comment,
+/// upgraded from a comment into code once a recipe ("Avocado-Black Bean
+/// Tostadas", corn tortillas) actually ranked on the false match. Add words
+/// here as real recipes surface more of them — the newsletter's produce
+/// list is what determines which heads can even collide.
+const NOT_A_PRODUCE_FORM: &[&str] = &[
+    "tortilla", "tortillas", "flour", "starch", "vinegar", "syrup", "oil", "chip", "chips",
+    "flake", "flakes", "powder", "extract", "meal", "bread", "cereal", "milk",
+];
+
 /// True if a produce name and a recipe's key ingredient name the same
 /// ingredient. Both are split into plural-normalised words and compared
 /// from the front, so one may *extend* the other with trailing words but
@@ -314,16 +330,15 @@ fn singular(word: &str) -> &str {
 /// - "sugar snap" == "sugar snap peas"  (the feed abbreviates, recipes don't)
 /// - "corn"       != "corned beef"      (mid-word, not a word at all)
 /// - "potato"     != "sweet potato"     (leading qualifier: different thing)
+/// - "corn"       != "corn tortillas"   (trailing word names a product, not a form)
 ///
 /// ponytail: comparing head words, not substrings and not full equality.
 /// A leading qualifier makes a different ingredient with a different season
 /// ("broccoli"/"broccolini", "potato"/"sweet potato", "broccoli"/"chinese
-/// broccoli"), which is intended behaviour rather than a gap to fill. The
-/// known soft spot is the mirror case — "apple" also matches "apple cider
-/// vinegar" — which needs a stop-list of non-produce heads only if a recipe
-/// ever ranks on one. Irregular plurals (leaf/leaves) and synonyms
-/// (capsicum/bell pepper, beetroot/beets) stay out of scope until the
-/// newsletter publishes names this misses.
+/// broccoli"), which is intended behaviour rather than a gap to fill.
+/// Irregular plurals (leaf/leaves) and synonyms (capsicum/bell pepper,
+/// beetroot/beets) stay out of scope until the newsletter publishes names
+/// this misses.
 fn produce_matches(produce: &str, key: &str) -> bool {
     let normalise = |s: &str| {
         s.to_lowercase()
@@ -334,7 +349,11 @@ fn produce_matches(produce: &str, key: &str) -> bool {
     };
     let (produce, key) = (normalise(produce), normalise(key));
     let shared = produce.len().min(key.len());
-    shared > 0 && produce[..shared] == key[..shared]
+    if shared == 0 || produce[..shared] != key[..shared] {
+        return false;
+    }
+    let longer = if produce.len() > key.len() { &produce } else { &key };
+    !longer[shared..].iter().any(|w| NOT_A_PRODUCE_FORM.contains(&w.as_str()))
 }
 
 /// Scores a recipe against this week's produce by how *defining* the
@@ -1043,10 +1062,11 @@ mod tests {
         assert!(!produce_matches("corn", "sweet corn"));
         assert!(!produce_matches("broccoli", "chinese broccoli"));
 
-        // ponytail: known soft spot — a trailing extension that is not the
-        // same ingredient. Harmless while no recipe ranks on it; if one
-        // does, this is the assertion to flip.
-        assert!(produce_matches("apple", "apple cider vinegar"));
+        // Flipped from the original soft-spot assertion once a real recipe
+        // ("Avocado-Black Bean Tostadas") actually ranked on "corn" ==
+        // "corn tortillas" — see NOT_A_PRODUCE_FORM.
+        assert!(!produce_matches("apple", "apple cider vinegar"));
+        assert!(!produce_matches("corn", "corn tortillas"));
     }
 
     // Synonyms are out of scope for equality matching. Pinned so the
