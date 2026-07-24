@@ -74,7 +74,7 @@ function MatchingView({
         </div>
       )}
       <div className="divide-y divide-slate-100">
-        {filtered.map((rec, i) => (
+        {filtered.map((rec) => (
           <div
             key={rec.id}
             onClick={() => onSelectRecipe(rec.id)}
@@ -92,12 +92,26 @@ function MatchingView({
               />
             )}
             <div className="min-w-0">
-              <div className="flex justify-between items-start mb-1.5">
-                <span className="text-[10px] font-semibold text-slate-400">#{i + 1}</span>
+              <div className="flex justify-between items-start mb-1.5 gap-2">
+                <h3 className="text-xs font-bold text-slate-900 leading-tight">{rec.title}</h3>
+                <span
+                  title="Seasonal match rating"
+                  className="shrink-0 text-[10px] font-bold text-emerald-600"
+                >
+                  {Math.round(rec.rating * 100)}%
+                </span>
               </div>
-              <h3 className="text-xs font-bold text-slate-900 leading-tight mb-1">{rec.title}</h3>
               <div className="flex flex-wrap gap-1">
-                {rec.matches.map((ing) => (
+                {rec.pick_matches.map((ing) => (
+                  <span
+                    key={ing}
+                    className="text-[9px] bg-amber-50 px-1.5 py-0.5 rounded text-amber-700"
+                  >
+                    <Check className="w-2.5 h-2.5 inline -mt-px mr-0.5" />
+                    {ing}
+                  </span>
+                ))}
+                {rec.seasonal_matches.map((ing) => (
                   <span
                     key={ing}
                     className="text-[9px] bg-emerald-50 px-1.5 py-0.5 rounded text-emerald-700"
@@ -122,68 +136,76 @@ function MatchingView({
   );
 }
 
-function ProduceView({ produce, searchQuery }) {
-  const [category, setCategory] = useState("All");
-
-  const items = [
-    ...produce.fruit.map((name) => ({ name, type: "Fruit" })),
-    ...produce.vegetable.map((name) => ({ name, type: "Vegetable" })),
-  ]
-    .filter((item) => category === "All" || item.type === category)
-    .filter((item) => item.name.toLowerCase().includes(searchQuery.toLowerCase()));
-
+function ProduceRow({ name, type, meta, dot }) {
   return (
-    <div className="flex-1 overflow-y-auto p-3 space-y-4">
-      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-        <span className="text-xs font-bold text-slate-500">Filter Category</span>
-        <div className="flex space-x-1">
-          {["All", "Fruit", "Vegetable"].map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setCategory(cat)}
-              className={`text-[10px] px-2 py-0.5 rounded ${
-                category === cat
-                  ? "bg-slate-200 text-slate-800 font-semibold"
-                  : "text-slate-500 hover:text-slate-800"
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
+    <div className="p-2.5 rounded-lg border border-emerald-500/20 bg-emerald-50/10 flex items-center justify-between transition-all hover:border-emerald-500/40">
+      <div className="flex items-center space-x-2.5">
+        {type ? <ProduceIcon type={type} /> : dot}
+        <div>
+          <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1 capitalize">
+            {name}
+            {meta?.pick && <span title="Pick of the week">★</span>}
+          </h4>
+          {meta?.label && <span className="text-[9px] text-slate-400">{meta.label}</span>}
         </div>
       </div>
-      <div className="grid grid-cols-1 gap-2">
-        {items.map((item) => (
-          <div
-            key={item.name}
-            className="p-2.5 rounded-lg border border-emerald-500/20 bg-emerald-50/10 flex items-center justify-between transition-all hover:border-emerald-500/40"
-          >
-            <div className="flex items-center space-x-2.5">
-              <ProduceIcon type={item.type} />
-              <div>
-                <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1">
-                  {item.name}
-                  {inList(produce.pick, item.name) && <span title="Pick of the week">★</span>}
-                </h4>
-                <span className="text-[9px] text-slate-400">
-                  {item.type}
-                  {inList(produce.featured, item.name) && " · Featured"}
-                </span>
-              </div>
-            </div>
-            <div className="w-5 h-5 shrink-0 rounded-full bg-emerald-500 text-white flex items-center justify-center">
-              <Check className="w-3.5 h-3.5" />
-            </div>
-          </div>
-        ))}
+      <div className="w-5 h-5 shrink-0 rounded-full bg-emerald-500 text-white flex items-center justify-center">
+        <Check className="w-3.5 h-3.5" />
       </div>
-      {items.length === 0 && (
-        <p className="text-xs text-slate-400">
-          {produce.fruit.length + produce.vegetable.length === 0
-            ? "No produce loaded yet."
-            : "No produce matches that filter."}
-        </p>
-      )}
+    </div>
+  );
+}
+
+// Two layers: Dave's Picks come from the live market update; Seasonal
+// produce comes from the stable per-season table (see seasonal_in_season in
+// lib.rs). A market item already in the seasonal list isn't repeated below.
+function ProduceView({ produce, seasonal, searchQuery }) {
+  const q = searchQuery.toLowerCase();
+  const market = [
+    ...produce.fruit.map((name) => ({ name, type: "Fruit" })),
+    ...produce.vegetable.map((name) => ({ name, type: "Vegetable" })),
+  ].filter((item) => item.name.toLowerCase().includes(q));
+
+  const marketNames = new Set([...produce.fruit, ...produce.vegetable].map((n) => n.toLowerCase()));
+  const seasonalItems = (seasonal.produce || [])
+    .filter((name) => !marketNames.has(name.toLowerCase()))
+    .filter((name) => name.toLowerCase().includes(q));
+
+  return (
+    <div className="flex-1 overflow-y-auto p-3 space-y-5">
+      <div className="space-y-2">
+        <h4 className="text-[10px] font-bold uppercase tracking-wider text-amber-600">
+          Dave's Picks
+        </h4>
+        {market.map((item) => (
+          <ProduceRow
+            key={item.name}
+            name={item.name}
+            type={item.type}
+            meta={{
+              pick: inList(produce.pick, item.name),
+              label: item.type + (inList(produce.featured, item.name) ? " · Featured" : ""),
+            }}
+          />
+        ))}
+        {market.length === 0 && <p className="text-[11px] text-slate-400">Nothing this week.</p>}
+      </div>
+
+      <div className="space-y-2">
+        <h4 className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
+          In Season{seasonal.season ? ` · ${seasonal.season}` : ""}
+        </h4>
+        {seasonalItems.map((name) => (
+          <ProduceRow
+            key={name}
+            name={name}
+            dot={<span className="w-8 h-8 shrink-0 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-base">🌿</span>}
+          />
+        ))}
+        {seasonalItems.length === 0 && (
+          <p className="text-[11px] text-slate-400">Nothing more in season.</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -283,6 +305,7 @@ export default function RecipeList({
   onSearchChange,
   selectedTag,
   produce,
+  seasonal,
   rankedRecipes,
   allRecipes,
   activeRecipeId,
@@ -331,7 +354,9 @@ export default function RecipeList({
           onFixNow={onFixNow}
         />
       )}
-      {selectedNav === "produce" && <ProduceView produce={produce} searchQuery={searchQuery} />}
+      {selectedNav === "produce" && (
+        <ProduceView produce={produce} seasonal={seasonal} searchQuery={searchQuery} />
+      )}
       {selectedNav === "recipes" && (
         <SavedRecipesView
           recipes={allRecipes}

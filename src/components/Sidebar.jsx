@@ -3,7 +3,7 @@ import { Leaf, Sparkles, BookOpen, RefreshCw, ChevronDown } from "lucide-react";
 
 const NAV_ITEMS = [
   { key: "matching", label: "Harvest Matches", icon: Sparkles, count: (c) => c.matchCount },
-  { key: "produce", label: "This Week's Produce", icon: Leaf, count: (c) => c.produceCount },
+  { key: "produce", label: "In Season", icon: Leaf, count: (c) => c.produceCount },
   { key: "recipes", label: "Saved Recipes", icon: BookOpen, count: (c) => c.recipeCount },
 ];
 

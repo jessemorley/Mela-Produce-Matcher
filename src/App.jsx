@@ -21,6 +21,7 @@ export default function App() {
   const [feedLink, setFeedLink] = useState("");
   const [feedHtml, setFeedHtml] = useState("");
   const [produce, setProduce] = useState({ fruit: [], vegetable: [], pick: [], featured: [] });
+  const [seasonal, setSeasonal] = useState({ season: "", produce: [] });
   const [recipeCount, setRecipeCount] = useState(0);
 
   const [rankedRecipes, setRankedRecipes] = useState([]); // scored locally by key ingredients
@@ -47,9 +48,12 @@ export default function App() {
         setRecipeCount(result.recipe_count);
         setUnanalyzedCount(result.unanalyzed_count);
         setUnfixedCount(result.unfixed_count);
-        return invoke("list_recipes");
+        return Promise.all([invoke("list_recipes"), invoke("seasonal_in_season")]);
       })
-      .then((recipes) => setAllRecipes(recipes ?? [])) // unfixedCount already came from sync_on_launch
+      .then(([recipes, seasonalInfo]) => {
+        setAllRecipes(recipes ?? []); // unfixedCount already came from sync_on_launch
+        setSeasonal(seasonalInfo);
+      })
       .catch((err) => setStatus(err === "cancelled" ? "Cancelled." : `Error: ${err}`))
       .finally(() => setBusy(false));
 
@@ -168,7 +172,7 @@ export default function App() {
         selectedNav={selectedNav}
         onSelectNav={setSelectedNav}
         matchCount={rankedRecipes.length}
-        produceCount={produce.fruit.length + produce.vegetable.length}
+        produceCount={produce.fruit.length + produce.vegetable.length + seasonal.produce.length}
         recipeCount={recipeCount}
         busy={busy}
         onFullResync={fullResync}
@@ -183,6 +187,7 @@ export default function App() {
         onSearchChange={setSearchQuery}
         selectedTag={selectedTag}
         produce={produce}
+        seasonal={seasonal}
         rankedRecipes={rankedRecipes}
         allRecipes={allRecipes}
         activeRecipeId={activeRecipe?.id}

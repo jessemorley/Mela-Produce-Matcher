@@ -12,7 +12,19 @@ function inList(list, name) {
 
 export default function RecipeDetail({ recipe }) {
   const ingredients = recipe.ingredients || [];
-  const matches = recipe.matches || [];
+  // Dave's Picks (live market update) take precedence over the seasonal
+  // table when a key ingredient is in both, matching the backend's scoring.
+  const pickMatches = recipe.pick_matches || [];
+  const seasonalMatches = recipe.seasonal_matches || [];
+
+  // Which tag (if any) applies to a given ingredient name: Dave's Pick beats
+  // In Season when both apply.
+  function tagFor(name) {
+    if (!name) return null;
+    if (inList(pickMatches, name)) return "pick";
+    if (inList(seasonalMatches, name)) return "seasonal";
+    return null;
+  }
 
   // Index carried alongside each row so duplicate display lines (e.g. two
   // "1 clove garlic" entries) still get unique React keys.
@@ -21,12 +33,12 @@ export default function RecipeDetail({ recipe }) {
   const pantryRows = indexed.filter(({ ingredient }) => ingredient.pantry);
 
   function IngredientRow({ ingredient }) {
-    const inSeason =
-      !ingredient.pantry && ingredient.name && matches.length > 0 && inList(matches, ingredient.name);
+    const tag = ingredient.pantry ? null : tagFor(ingredient.name);
+    const highlit = tag !== null;
     return (
       <div
         className={`flex items-center justify-between p-2.5 rounded-lg border ${
-          inSeason
+          highlit
             ? "border-emerald-500/20 bg-emerald-50/60 text-slate-800"
             : "border-slate-200/60 text-slate-500"
         }`}
@@ -34,10 +46,10 @@ export default function RecipeDetail({ recipe }) {
         <div className="flex items-center space-x-2.5 min-w-0">
           <div
             className={`w-4 h-4 rounded flex items-center justify-center shrink-0 ${
-              inSeason ? "bg-emerald-500 text-white" : "border border-slate-300"
+              highlit ? "bg-emerald-500 text-white" : "border border-slate-300"
             }`}
           >
-            {inSeason && <Check className="w-3 h-3" />}
+            {highlit && <Check className="w-3 h-3" />}
           </div>
           <span className="relative group/tooltip text-xs truncate capitalize">
             {ingredient.name || ingredient.display}
@@ -48,7 +60,12 @@ export default function RecipeDetail({ recipe }) {
             )}
           </span>
         </div>
-        {inSeason && (
+        {tag === "pick" && (
+          <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold shrink-0">
+            Dave's Pick
+          </span>
+        )}
+        {tag === "seasonal" && (
           <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold shrink-0">
             In Season
           </span>
@@ -92,18 +109,23 @@ export default function RecipeDetail({ recipe }) {
       {recipe.key_ingredients?.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[11px] uppercase tracking-wider text-slate-400">Built around</span>
-          {recipe.key_ingredients.map((ing) => (
-            <span
-              key={ing}
-              className={`text-[11px] px-2 py-0.5 rounded ${
-                inList(matches, ing)
-                  ? "bg-emerald-100 text-emerald-700 font-medium"
-                  : "bg-slate-100 text-slate-600"
-              }`}
-            >
-              {ing}
-            </span>
-          ))}
+          {recipe.key_ingredients.map((ing) => {
+            const tag = tagFor(ing);
+            return (
+              <span
+                key={ing}
+                className={`text-[11px] px-2 py-0.5 rounded ${
+                  tag === "pick"
+                    ? "bg-amber-100 text-amber-700 font-medium"
+                    : tag === "seasonal"
+                      ? "bg-emerald-100 text-emerald-700 font-medium"
+                      : "bg-slate-100 text-slate-600"
+                }`}
+              >
+                {ing}
+              </span>
+            );
+          })}
         </div>
       )}
 

@@ -26,4 +26,5 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 ureq = "2"
 base64 = "0.22"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "tiff"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 

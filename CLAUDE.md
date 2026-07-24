@@ -105,14 +105,27 @@ the user verifies UI/UX changes visually themselves in the running
    to the one being fixed, since Mela repeats common lines ("1 tsp salt")
    verbatim across many recipes — fixing it once shouldn't mean re-typing
    the same correction for every recipe that has it.
-5. `match_recipes` — **no Claude call.** Scores cached recipes locally
-   against the week's produce with `score_recipe`: a hit on the first key
-   ingredient is worth 4, the second 3, and so on (floored at 1), so
-   recipes *built around* in-season produce outrank ones that merely
-   garnish with it. Recipes scoring 0 are dropped; ties break on title for
-   a stable order. Instant and offline, so `App.jsx` just re-runs it in an
+5. `match_recipes` — **no Claude call.** Rates cached recipes locally with
+   `rate_recipe` across **two layers**: the live market update (`fruit`+
+   `vegetable`, "Dave's Picks") weighted `PICK_WEIGHT` (3), and a stable
+   per-season produce table (`SEASONAL_PRODUCE`, filtered by
+   `current_season()` off the system clock — AU seasons) weighted
+   `SEASONAL_WEIGHT` (1). Each key ingredient scores its rank weight (first
+   key ingredient worth 4, second 3, ... floored at 1) times the best layer
+   it hits, and the result is normalised to a **0.0–1.0 `rating`** (score
+   over the max possible, every key ingredient a top-weighted pick) — a
+   match *rating*, not an ordinal rank, so it's comparable across recipes
+   regardless of ingredient count and the UI shows a percentage. A market
+   pick always beats a seasonal-only hit for the same ingredient (and isn't
+   double-counted). Each ranked recipe carries `pick_matches` and
+   `seasonal_matches` separately so the UI can tag them differently ("Dave's
+   Pick" amber vs "In Season" green). Recipes rating 0 are dropped; ties
+   break on title. Instant and offline, so `App.jsx` just re-runs it in an
    effect whenever produce or the recipe list changes — there's no "Match
-   Recipes" button. Produce names and key ingredients are compared by
+   Recipes" button. `seasonal_in_season` is a separate cheap command (no
+   recipes, calendar-only) returning the current season name plus its
+   in-season table produce, for the "In Season" tab's second list. Produce
+   names and key ingredients are compared by
    `produce_matches`, which splits both into plural-normalised words and
    compares them *from the front*: a trailing noun extends a name
    ("sugar snap" == "sugar snap peas", since the feed abbreviates where
@@ -193,11 +206,14 @@ left nav (Harvest Matches / This Week's Produce / Saved Recipes) with live
 counts, a middle list that switches view based on the selected nav item,
 and a right detail pane (`RecipeDetail.jsx`) showing whichever recipe is
 selected. `match_recipes` returns each ranked recipe flattened with its full
-record plus `score`/`matches`, so the detail pane needs no merging — it
-falls back to the Saved Recipes list only for recipes that never matched.
-`RecipeDetail.jsx` shows the stored `key_ingredients` as a "Built around"
-row, then the recipe text, then the ingredients below it split into Produce
-and Pantry columns by each ingredient's own `pantry` flag — no JS-side
+record plus `rating`/`pick_matches`/`seasonal_matches`, so the detail pane
+needs no merging — it falls back to the Saved Recipes list only for recipes
+that never matched. The left nav's "In Season" tab (formerly "This Week's
+Produce") lists both Dave's Picks (market update) and the seasonal-table
+produce for the current season. `RecipeDetail.jsx` shows the stored
+`key_ingredients` as a "Built around" row, then the recipe text, then the
+ingredients below it split into Produce and Pantry columns by each
+ingredient's own `pantry` flag — no JS-side
 reimplementation of any Rust logic, since the backend now stores the
 classification directly. Each row shows `ingredient.name` (capitalised via
 CSS, not string mutation) with the raw `display` line as a hover tooltip;

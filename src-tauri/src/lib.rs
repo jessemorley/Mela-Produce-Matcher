@@ -515,21 +515,205 @@ fn produce_matches(produce: &str, key: &str) -> bool {
     !longer[shared..].iter().any(|w| NOT_A_PRODUCE_FORM.contains(&w.as_str()))
 }
 
-/// Scores a recipe against this week's produce by how *defining* the
-/// matching ingredients are: the first key ingredient is worth the most,
-/// each subsequent one less. Recipes with no key-ingredient hit score 0 and
-/// are dropped by the caller.
-fn score_recipe(recipe: &Recipe, produce: &[String]) -> (u32, Vec<String>) {
-    let mut score = 0;
-    let mut matched = Vec::new();
+// Season bitmask. Australia's calendar seasons (summer = Dec/Jan/Feb, etc.).
+const SUMMER: u8 = 1 << 0;
+const AUTUMN: u8 = 1 << 1;
+const WINTER: u8 = 1 << 2;
+const SPRING: u8 = 1 << 3;
+
+/// The current Australian season from the system clock's local month.
+/// Dec/Jan/Feb = summer, and so on down under.
+fn current_season() -> u8 {
+    use chrono::{Datelike, Local};
+    match Local::now().month() {
+        12 | 1 | 2 => SUMMER,
+        3..=5 => AUTUMN,
+        6..=8 => WINTER,
+        _ => SPRING,
+    }
+}
+
+/// Stable "what's generally in season" table for Australia, from Sustainable
+/// Table's seasonal produce guide. Names are singular/lowercase to compare
+/// via `produce_matches` the same way the newsletter's names do. This is the
+/// second, lower-weighted matching layer under the live market update — it
+/// doesn't change week to week, only with the season.
+const SEASONAL_PRODUCE: &[(&str, u8)] = &[
+    // Fruit
+    ("apple", AUTUMN | WINTER | SPRING | SUMMER),
+    ("apricot", SUMMER),
+    ("avocado", AUTUMN | WINTER | SPRING | SUMMER),
+    ("banana", AUTUMN | SPRING | SUMMER),
+    ("blackberry", AUTUMN | SUMMER),
+    ("blueberry", SPRING | SUMMER),
+    ("boysenberry", SUMMER),
+    ("cantaloupe", SPRING | SUMMER),
+    ("cherry", SPRING | SUMMER),
+    ("cumquat", AUTUMN | WINTER | SPRING),
+    ("currant", SUMMER),
+    ("custard apple", AUTUMN | WINTER),
+    ("feijoa", AUTUMN | WINTER),
+    ("fig", AUTUMN | SUMMER),
+    ("grapefruit", AUTUMN | WINTER | SPRING | SUMMER),
+    ("grape", AUTUMN | SUMMER),
+    ("guava", AUTUMN),
+    ("honeydew", SPRING | SUMMER),
+    ("kiwi fruit", AUTUMN | WINTER),
+    ("lemon", AUTUMN | WINTER | SPRING | SUMMER),
+    ("lime", AUTUMN | WINTER | SPRING | SUMMER),
+    ("loganberry", SUMMER),
+    ("loquat", SPRING),
+    ("lychee", SPRING | SUMMER),
+    ("mango", AUTUMN | SPRING | SUMMER),
+    ("mangosteen", AUTUMN),
+    ("mulberry", SPRING | SUMMER),
+    ("nashi", AUTUMN | WINTER),
+    ("nectarine", SUMMER),
+    ("orange", AUTUMN | WINTER | SPRING | SUMMER),
+    ("papaya", AUTUMN | SPRING),
+    ("passionfruit", AUTUMN | SUMMER),
+    ("peach", AUTUMN | SUMMER),
+    ("pear", AUTUMN | WINTER | SPRING | SUMMER),
+    ("pepino", SPRING),
+    ("persimmon", AUTUMN | WINTER),
+    ("pineapple", WINTER | SPRING | SUMMER),
+    ("plum", AUTUMN | SUMMER),
+    ("pomegranate", AUTUMN),
+    ("prickly pear", AUTUMN),
+    ("quince", AUTUMN | WINTER),
+    ("rambutan", AUTUMN | SUMMER),
+    ("raspberry", AUTUMN | SUMMER),
+    ("rhubarb", AUTUMN | WINTER | SPRING | SUMMER),
+    ("starfruit", SPRING),
+    ("strawberry", AUTUMN | SPRING | SUMMER),
+    ("tamarillo", AUTUMN | WINTER | SPRING | SUMMER),
+    ("tangelo", WINTER | SPRING),
+    ("watermelon", SPRING | SUMMER),
+    // Vegetables
+    ("artichoke", AUTUMN | SPRING),
+    ("asian greens", AUTUMN | WINTER | SPRING),
+    ("asparagus", SPRING | SUMMER),
+    ("bean", AUTUMN | SPRING | SUMMER),
+    ("beetroot", AUTUMN | SPRING | SUMMER),
+    ("broccoli", AUTUMN | WINTER | SPRING),
+    ("broccolini", WINTER),
+    ("broad bean", WINTER),
+    ("brussels sprout", AUTUMN | WINTER | SPRING),
+    ("cabbage", AUTUMN | WINTER | SPRING | SUMMER),
+    ("capsicum", AUTUMN | WINTER | SPRING | SUMMER),
+    ("carrot", AUTUMN | WINTER | SPRING | SUMMER),
+    ("cauliflower", AUTUMN | WINTER | SPRING),
+    ("celeriac", WINTER),
+    ("celery", AUTUMN | WINTER | SPRING | SUMMER),
+    ("corn", AUTUMN | SPRING | SUMMER),
+    ("cucumber", AUTUMN | WINTER | SPRING | SUMMER),
+    ("daikon", AUTUMN | SPRING | SUMMER),
+    ("eggplant", AUTUMN | WINTER | SPRING | SUMMER),
+    ("fennel", AUTUMN | WINTER | SPRING),
+    ("horseradish", WINTER),
+    ("kale", WINTER),
+    ("kohlrabi", WINTER),
+    ("leek", AUTUMN | WINTER | SPRING | SUMMER),
+    ("lettuce", AUTUMN | WINTER | SPRING | SUMMER),
+    ("mushroom", AUTUMN | WINTER | SPRING | SUMMER),
+    ("okra", AUTUMN | WINTER | SPRING | SUMMER),
+    ("onion", AUTUMN | WINTER | SPRING | SUMMER),
+    ("parsnip", AUTUMN | WINTER | SPRING),
+    ("pea", SPRING | SUMMER),
+    ("potato", AUTUMN | WINTER | SPRING | SUMMER),
+    ("pumpkin", AUTUMN | WINTER | SPRING),
+    ("radish", WINTER | SPRING | SUMMER),
+    ("shallot", AUTUMN | WINTER | SPRING | SUMMER),
+    ("silverbeet", AUTUMN | WINTER | SPRING | SUMMER),
+    ("snow pea", SUMMER),
+    ("spinach", AUTUMN | WINTER | SPRING),
+    ("spring onion", AUTUMN | WINTER | SPRING | SUMMER),
+    ("squash", AUTUMN | SPRING | SUMMER),
+    ("sugar snap", SUMMER),
+    ("swede", AUTUMN | WINTER | SPRING),
+    ("sweet potato", AUTUMN | WINTER | SPRING),
+    ("tomato", AUTUMN | SPRING | SUMMER),
+    ("turnip", AUTUMN | WINTER | SPRING),
+    ("watercress", AUTUMN | SPRING | SUMMER),
+    ("witlof", AUTUMN | SPRING),
+    ("zucchini", AUTUMN | SPRING | SUMMER),
+    // Herbs
+    ("apple mint", SUMMER),
+    ("basil", AUTUMN | SPRING | SUMMER),
+    ("chervil", AUTUMN | SPRING | SUMMER),
+    ("chilli", AUTUMN | SPRING | SUMMER),
+    ("chive", AUTUMN | SPRING | SUMMER),
+    ("coriander", AUTUMN | WINTER | SPRING | SUMMER),
+    ("dill", AUTUMN | WINTER | SPRING | SUMMER),
+    ("garlic", AUTUMN | SPRING | SUMMER),
+    ("ginger", AUTUMN | WINTER | SPRING | SUMMER),
+    ("lemongrass", AUTUMN | SPRING | SUMMER),
+    ("makrut lime", AUTUMN | SPRING | SUMMER),
+    ("mint", AUTUMN | WINTER | SPRING | SUMMER),
+    ("oregano", AUTUMN | WINTER | SPRING | SUMMER),
+    ("parsley", AUTUMN | WINTER | SPRING | SUMMER),
+    ("rosemary", AUTUMN | WINTER | SPRING | SUMMER),
+    ("sage", AUTUMN | SPRING),
+    ("tarragon", AUTUMN | SUMMER),
+    ("thai basil", SUMMER),
+    ("thyme", AUTUMN | SUMMER),
+    ("vietnamese mint", SUMMER),
+];
+
+/// The names from the seasonal table that are in season for the given season
+/// mask. Returned lowercase/singular, ready for `produce_matches`.
+fn seasonal_produce(season: u8) -> Vec<String> {
+    SEASONAL_PRODUCE
+        .iter()
+        .filter(|(_, seasons)| seasons & season != 0)
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
+// A key ingredient's base worth by rank: the first (most-defining) is worth
+// the most, each subsequent one less, floored at 1. Rank 0 -> 4, 1 -> 3, ...
+fn rank_weight(rank: usize) -> u32 {
+    4u32.saturating_sub(rank as u32).max(1)
+}
+
+// A Dave's Pick (live market update) hit counts full; a seasonal-table-only
+// hit counts a third as much, so a recipe built around this week's actual
+// produce always outranks one that's merely in season generally, but the
+// seasonal layer still separates and lifts recipes that would otherwise tie
+// at zero.
+const PICK_WEIGHT: u32 = 3;
+const SEASONAL_WEIGHT: u32 = 1;
+
+/// Rates a recipe 0.0–1.0 on how *defining* its in-season ingredients are,
+/// across both layers: the live market update (`market`, weighted full) and
+/// the stable seasonal table (`seasonal`, weighted lower). Each key
+/// ingredient scores its rank weight times the best layer it hits; the
+/// rating is that sum over the max possible (every key ingredient a
+/// top-weighted market pick), so it's comparable across recipes regardless
+/// of ingredient count. Returns the rating plus which matches came from each
+/// layer. Rating 0 means no hit in either layer.
+fn rate_recipe(
+    recipe: &Recipe,
+    market: &[String],
+    seasonal: &[String],
+) -> (f32, Vec<String>, Vec<String>) {
+    let mut score = 0u32;
+    let mut max = 0u32;
+    let mut market_matches = Vec::new();
+    let mut seasonal_matches = Vec::new();
     for (i, key) in recipe.key_ingredients.iter().enumerate() {
-        if produce.iter().any(|p| produce_matches(p, key)) {
-            // Rank 0 scores 4, rank 1 scores 3, ... floored at 1.
-            score += 4u32.saturating_sub(i as u32).max(1);
-            matched.push(key.clone());
+        let weight = rank_weight(i);
+        max += weight * PICK_WEIGHT;
+        if market.iter().any(|p| produce_matches(p, key)) {
+            score += weight * PICK_WEIGHT;
+            market_matches.push(key.clone());
+        } else if seasonal.iter().any(|p| produce_matches(p, key)) {
+            score += weight * SEASONAL_WEIGHT;
+            seasonal_matches.push(key.clone());
         }
     }
-    (score, matched)
+    let rating = if max == 0 { 0.0 } else { score as f32 / max as f32 };
+    (rating, market_matches, seasonal_matches)
 }
 
 /// Diffs Mela's current ID list against the cache: recipes whose ID is
@@ -1016,21 +1200,28 @@ async fn analyze_new_recipes(
 struct RankedRecipe {
     #[serde(flatten)]
     recipe: Recipe,
-    score: u32,
-    matches: Vec<String>,
+    /// 0.0–1.0 seasonal match rating (see `rate_recipe`), surfaced to the UI
+    /// as a percentage rather than an ordinal rank.
+    rating: f32,
+    /// Key ingredients that are this week's actual market-update picks.
+    pick_matches: Vec<String>,
+    /// Key ingredients in season per the stable seasonal table but not in
+    /// this week's market update.
+    seasonal_matches: Vec<String>,
 }
 
-/// Ranks cached recipes against this week's produce using the stored
-/// key_ingredients — no Claude call, so this is instant and offline. Only
-/// analysed recipes can match; unanalysed ones score 0 until "Sync Now"
-/// runs.
+/// Rates cached recipes against this week's produce and the seasonal table
+/// using the stored key_ingredients — no Claude call, so this is instant and
+/// offline. Only analysed recipes can match; unanalysed ones rate 0 until
+/// "Sync Now" runs.
 #[tauri::command]
 fn match_recipes(
     app: tauri::AppHandle,
     fruit: Vec<String>,
     vegetable: Vec<String>,
 ) -> Result<Vec<RankedRecipe>, String> {
-    let produce: Vec<String> = fruit.into_iter().chain(vegetable).collect();
+    let market: Vec<String> = fruit.into_iter().chain(vegetable).collect();
+    let seasonal = seasonal_produce(current_season());
     let recipes = load_recipes_cache(&app)
         .ok_or_else(|| "No cached recipes — sync hasn't run yet".to_string())?;
     if recipes.is_empty() {
@@ -1040,18 +1231,20 @@ fn match_recipes(
     let mut ranked: Vec<RankedRecipe> = recipes
         .into_iter()
         .filter_map(|r| {
-            let (score, matches) = score_recipe(&r, &produce);
-            (score > 0).then(|| RankedRecipe {
+            let (rating, pick_matches, seasonal_matches) = rate_recipe(&r, &market, &seasonal);
+            (rating > 0.0).then(|| RankedRecipe {
                 recipe: r,
-                score,
-                matches,
+                rating,
+                pick_matches,
+                seasonal_matches,
             })
         })
         .collect();
-    // Highest score first, ties broken by title so the order is stable.
+    // Highest rating first, ties broken by title so the order is stable.
     ranked.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
+        b.rating
+            .partial_cmp(&a.rating)
+            .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.recipe.title.cmp(&b.recipe.title))
     });
 
@@ -1062,6 +1255,29 @@ fn match_recipes(
 #[tauri::command]
 fn list_recipes(app: tauri::AppHandle) -> Result<Vec<Recipe>, String> {
     Ok(load_recipes_cache(&app).unwrap_or_default())
+}
+
+#[derive(Serialize, Clone)]
+struct SeasonalInfo {
+    season: &'static str,
+    produce: Vec<String>,
+}
+
+/// The stable seasonal-table produce that's in season right now, for the
+/// "In Season" tab's second list (the market update is the first). Depends
+/// only on the calendar, so it's a cheap standalone command.
+#[tauri::command]
+fn seasonal_in_season() -> SeasonalInfo {
+    let season = current_season();
+    SeasonalInfo {
+        season: match season {
+            SUMMER => "Summer",
+            AUTUMN => "Autumn",
+            WINTER => "Winter",
+            _ => "Spring",
+        },
+        produce: seasonal_produce(season),
+    }
 }
 
 /// Fixes an unanalysed ingredient line by hand — the "Fix Now" queue.
@@ -1281,16 +1497,50 @@ mod tests {
     }
 
     // The whole point of the redesign: a recipe built around in-season
-    // produce must outrank one that merely garnishes with it.
+    // produce must outrate one that merely garnishes with it.
     #[test]
-    fn defining_ingredient_outranks_garnish() {
+    fn defining_ingredient_outrates_garnish() {
         let produce = vec!["asparagus".to_string()];
         let star = recipe("a", "Asparagus Stir Fry", &["asparagus", "tofu"]);
         let garnish = recipe("b", "Beef Pie", &["beef", "pastry", "asparagus"]);
-        let (star_score, matches) = score_recipe(&star, &produce);
-        let (garnish_score, _) = score_recipe(&garnish, &produce);
-        assert!(star_score > garnish_score);
-        assert_eq!(matches, vec!["asparagus"]);
+        let (star_rating, picks, _) = rate_recipe(&star, &produce, &[]);
+        let (garnish_rating, ..) = rate_recipe(&garnish, &produce, &[]);
+        assert!(star_rating > garnish_rating);
+        assert_eq!(picks, vec!["asparagus"]);
+    }
+
+    // A market-update pick must outrate a seasonal-table-only hit: same key
+    // ingredient rank, but the live pick is weighted higher.
+    #[test]
+    fn market_pick_outrates_seasonal_only() {
+        let star = recipe("a", "Asparagus Stir Fry", &["asparagus"]);
+        let (pick_rating, picks, seasonal) =
+            rate_recipe(&star, &["asparagus".to_string()], &["asparagus".to_string()]);
+        let (seasonal_rating, picks2, seasonal2) =
+            rate_recipe(&star, &[], &["asparagus".to_string()]);
+        assert!(pick_rating > seasonal_rating);
+        assert_eq!(picks, vec!["asparagus"]);
+        assert!(seasonal.is_empty()); // market hit wins, not double-counted
+        assert!(picks2.is_empty());
+        assert_eq!(seasonal2, vec!["asparagus"]);
+    }
+
+    // A perfect market match rates 1.0; no hit at all rates 0.0.
+    #[test]
+    fn rating_is_normalised_zero_to_one() {
+        let r = recipe("a", "Asparagus", &["asparagus"]);
+        assert_eq!(rate_recipe(&r, &["asparagus".to_string()], &[]).0, 1.0);
+        assert_eq!(rate_recipe(&r, &[], &[]).0, 0.0);
+    }
+
+    // The seasonal table is keyed by an AU season bitmask; a winter query
+    // must surface winter produce and exclude summer-only produce.
+    #[test]
+    fn seasonal_produce_filters_by_season() {
+        let winter = seasonal_produce(WINTER);
+        assert!(winter.contains(&"kale".to_string())); // winter-only
+        assert!(winter.contains(&"broccoli".to_string())); // multi-season incl. winter
+        assert!(!winter.contains(&"asparagus".to_string())); // spring/summer only
     }
 
     // The whole point of matching on word boundaries: a short produce name
@@ -1382,13 +1632,15 @@ mod tests {
     }
 
     #[test]
-    fn recipe_with_no_matching_key_ingredient_scores_zero() {
-        let (score, matches) = score_recipe(
+    fn recipe_with_no_matching_key_ingredient_rates_zero() {
+        let (rating, picks, seasonal) = rate_recipe(
             &recipe("a", "Beef Pie", &["beef", "pastry"]),
             &["asparagus".to_string()],
+            &[],
         );
-        assert_eq!(score, 0);
-        assert!(matches.is_empty());
+        assert_eq!(rating, 0.0);
+        assert!(picks.is_empty());
+        assert!(seasonal.is_empty());
     }
 
     // A launch resync must not wipe analysis: an id already in the cache is
@@ -1466,6 +1718,7 @@ pub fn run() {
             analyze_new_recipes,
             match_recipes,
             list_recipes,
+            seasonal_in_season,
             set_ingredient_name,
             cancel,
             open_recipe,
