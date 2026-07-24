@@ -48,14 +48,29 @@ still no linter or JS test suite.
    featured lists and skips the expensive Claude produce-extraction call
    entirely; on a miss (or missing/corrupt cache), re-runs the extraction
    (`parse_produce_line`) and rewrites the cache. Independently of that,
-   every launch also does a full resync of `recipes.json` (same app data
-   dir) from Mela's SQLite, running the fresh rows through `merge_recipes`
-   so already-analysed `key_ingredients` survive the overwrite — no
-   incremental diffing yet (see the `// ponytail:` comment on
-   `save_recipes_cache`). It returns `unanalyzed_count` (recipes with no
-   `key_ingredients`), which drives the "N new recipes detected / Sync Now"
-   banner. Launch never calls Claude for recipe analysis.
-2. `analyze_new_recipes` — the "Sync Now" button. Sends every cached recipe
+   every launch also syncs `recipes.json` (same app data dir) against Mela's
+   SQLite — but incrementally, not a full rescan: `recipe_ids` runs one cheap
+   query for every `(Z_PK, ZID)` in Mela, `diff_recipe_ids` compares that
+   against the cached recipe IDs, and only genuinely new IDs get a real
+   per-row read (`load_recipe`, image thumbnail included) while IDs already
+   in the cache are reused untouched — an in-Mela edit to an existing recipe
+   is *not* picked up this way (see `resync_recipe`/`full_resync` below).
+   `merge_recipes` (which used to reconcile a full fresh SQLite re-read
+   against the cache every launch) is gone; there's nothing left to
+   reconcile once already-cached recipes are never re-read. It returns
+   `unanalyzed_count` (recipes with no `key_ingredients`), which drives the
+   "N new recipes detected / Sync Now" banner. Launch never calls Claude for
+   recipe analysis.
+2. `resync_recipe(id)` / `full_resync` — the escape hatches for an edit made
+   directly in Mela, which `sync_on_launch`'s cache-trusting diff can't see.
+   `resync_recipe` re-reads one recipe by ID and splices it into the cache
+   (the "Resync from Mela" button in `RecipeDetail.jsx`, next to "Open in
+   Mela"); `full_resync` re-reads every recipe unconditionally, i.e. today's
+   pre-incremental-sync behavior on demand (the `RefreshCw` icon button in
+   `Sidebar.jsx`'s header). Both share `sync_produce` with `sync_on_launch`
+   for the produce-cache half so the three commands can't diverge on that
+   part — only the recipe-loading strategy differs.
+3. `analyze_new_recipes` — the "Sync Now" button. Sends every cached recipe
    with empty `key_ingredients` to Claude in a *single* batched call
    (`build_key_ingredient_prompt`), numbering each recipe's ingredient lines
    and asking for two things per recipe: the 2-4 defining ingredients
@@ -74,14 +89,14 @@ still no linter or JS test suite.
    event fires with that recipe's title, so the status bar shows real-time
    per-recipe progress ("Analysing 3/10: Asparagus Stir Fry") through the
    single batched call rather than sitting on one message for the whole run.
-3. `set_ingredient_name` — the "Fix Now" queue's save action. A recipe whose
+4. `set_ingredient_name` — the "Fix Now" queue's save action. A recipe whose
    analysis came back incomplete leaves some lines with `name: ""`
    (unfixed); this command sets a hand-typed `name`/`pantry` on **every**
    ingredient across the whole collection whose `display` is byte-identical
    to the one being fixed, since Mela repeats common lines ("1 tsp salt")
    verbatim across many recipes — fixing it once shouldn't mean re-typing
    the same correction for every recipe that has it.
-4. `match_recipes` — **no Claude call.** Scores cached recipes locally
+5. `match_recipes` — **no Claude call.** Scores cached recipes locally
    against the week's produce with `score_recipe`: a hit on the first key
    ingredient is worth 4, the second 3, and so on (floored at 1), so
    recipes *built around* in-season produce outrank ones that merely
@@ -96,7 +111,7 @@ still no linter or JS test suite.
    ("potato" != "sweet potato", "broccoli" != "broccolini"). Plain
    substring matching was the original rule and would rank a corned beef
    recipe as seasonal when corn is in season.
-5. `list_recipes` — returns the full local `recipes.json` as-is, for the
+6. `list_recipes` — returns the full local `recipes.json` as-is, for the
    frontend's "Saved Recipes" browse view (independent of any ranking).
 
 Only analysed recipes can ever match, since scoring reads `key_ingredients`

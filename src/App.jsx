@@ -125,6 +125,39 @@ export default function App() {
     }
   }
 
+  // Per-recipe escape hatch for an edit made directly in Mela: re-reads just
+  // that one recipe and splices it into allRecipes via applyRecipes, same
+  // pattern analyzeNew uses to keep unfixedCount in sync.
+  async function resyncRecipe(id) {
+    setBusy(true);
+    try {
+      const recipe = await invoke("resync_recipe", { id });
+      applyRecipes(allRecipes.map((r) => (r.id === id ? recipe : r)));
+    } catch (err) {
+      setStatus(`Error: ${err}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Full-collection escape hatch: same slow path sync_on_launch used to run
+  // unconditionally, now explicit. Replaces allRecipes wholesale.
+  async function fullResync() {
+    setBusy(true);
+    try {
+      const result = await invoke("full_resync");
+      setProduce(result.produce);
+      setRecipeCount(result.recipe_count);
+      setUnanalyzedCount(result.unanalyzed_count);
+      setUnfixedCount(result.unfixed_count);
+      applyRecipes((await invoke("list_recipes")) ?? []);
+    } catch (err) {
+      setStatus(err === "cancelled" ? "Cancelled." : `Error: ${err}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function cancel() {
     invoke("cancel");
   }
@@ -137,6 +170,8 @@ export default function App() {
         matchCount={rankedRecipes.length}
         produceCount={produce.fruit.length + produce.vegetable.length}
         recipeCount={recipeCount}
+        busy={busy}
+        onFullResync={fullResync}
       />
 
       <RecipeList
@@ -174,7 +209,7 @@ export default function App() {
               onBack={() => setShowArticle(false)}
             />
           ) : activeRecipe ? (
-            <RecipeDetail recipe={activeRecipe} />
+            <RecipeDetail recipe={activeRecipe} onResync={resyncRecipe} />
           ) : (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm gap-2">
               <Leaf className="w-8 h-8" />

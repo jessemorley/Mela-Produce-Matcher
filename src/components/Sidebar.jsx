@@ -1,4 +1,4 @@
-import { Leaf, Sparkles, BookOpen } from "lucide-react";
+import { Leaf, Sparkles, BookOpen, RefreshCw } from "lucide-react";
 
 const NAV_ITEMS = [
   { key: "matching", label: "Harvest Matches", icon: Sparkles, count: (c) => c.matchCount },
@@ -14,7 +14,15 @@ const PANTRY_TAGS = [
   { label: "Vegan/Vegetarian", dot: "bg-emerald-400" },
 ];
 
-export default function Sidebar({ selectedNav, onSelectNav, matchCount, produceCount, recipeCount }) {
+export default function Sidebar({
+  selectedNav,
+  onSelectNav,
+  matchCount,
+  produceCount,
+  recipeCount,
+  busy,
+  onFullResync,
+}) {
   const counts = { matchCount, produceCount, recipeCount };
 
   return (
@@ -25,10 +33,18 @@ export default function Sidebar({ selectedNav, onSelectNav, matchCount, produceC
         <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center shadow-lg shadow-teal-500/20">
           <Leaf className="w-5 h-5 text-white" />
         </div>
-        <div>
+        <div className="flex-1">
           <h1 className="font-bold text-sm tracking-wide text-slate-950">Sprout</h1>
           <p className="text-xs text-slate-500">Seasonal Matcher</p>
         </div>
+        <button
+          onClick={onFullResync}
+          disabled={busy}
+          title="Resync all recipes from Mela"
+          className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 disabled:opacity-50 transition-all"
+        >
+          <RefreshCw className={`w-4 h-4 ${busy ? "animate-spin" : ""}`} />
+        </button>
       </div>
 
       <div className="px-2 space-y-1">

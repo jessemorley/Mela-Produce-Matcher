@@ -183,27 +183,36 @@ function SavedRecipeRow({ rec, activeRecipeId, onSelectRecipe }) {
     <div
       key={rec.id}
       onClick={() => onSelectRecipe(rec.id)}
-      className={`p-3.5 cursor-pointer transition-all ${
+      className={`p-3.5 flex gap-3 cursor-pointer transition-all ${
         activeRecipeId === rec.id ? "bg-slate-100" : "hover:bg-slate-50"
       }`}
     >
-      {rec.favorite && (
-        <div className="flex justify-end mb-1">
-          <Heart className="w-3.5 h-3.5 text-rose-500 fill-rose-500" />
-        </div>
+      {rec.image && (
+        <img
+          src={rec.image}
+          alt=""
+          className="w-14 h-14 shrink-0 rounded-lg object-cover"
+        />
       )}
-      <h3 className="text-xs font-bold text-slate-800">{rec.title}</h3>
-      {(rec.total_time || rec.yield) && (
-        <div className="flex items-center space-x-3 mt-2 text-[10px] text-slate-400">
-          {rec.total_time && (
-            <span className="flex items-center">
-              <Clock className="w-3 h-3 mr-1" />
-              {rec.total_time}
-            </span>
-          )}
-          {rec.yield && <span>Serves {rec.yield}</span>}
-        </div>
-      )}
+      <div className="min-w-0">
+        <h3 className="text-xs font-bold text-slate-800">{rec.title}</h3>
+        {(rec.total_time || rec.tags?.length > 0 || rec.favorite) && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-[10px] text-slate-400">
+            {rec.favorite && <Heart className="w-3 h-3 text-rose-500 fill-rose-500" />}
+            {rec.total_time && (
+              <span className="flex items-center">
+                <Clock className="w-3 h-3 mr-1" />
+                {rec.total_time}
+              </span>
+            )}
+            {rec.tags?.map((tag) => (
+              <span key={tag} className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
+                {tag}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
