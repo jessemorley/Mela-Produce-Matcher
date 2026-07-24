@@ -163,39 +163,79 @@ function ProduceView({ produce, searchQuery }) {
   );
 }
 
+function SavedRecipeRow({ rec, activeRecipeId, onSelectRecipe }) {
+  return (
+    <div
+      key={rec.id}
+      onClick={() => onSelectRecipe(rec.id)}
+      className={`p-3.5 cursor-pointer transition-all ${
+        activeRecipeId === rec.id ? "bg-slate-100" : "hover:bg-slate-50"
+      }`}
+    >
+      {rec.favorite && (
+        <div className="flex justify-end mb-1">
+          <Heart className="w-3.5 h-3.5 text-rose-500 fill-rose-500" />
+        </div>
+      )}
+      <h3 className="text-xs font-bold text-slate-800">{rec.title}</h3>
+      {(rec.total_time || rec.yield) && (
+        <div className="flex items-center space-x-3 mt-2 text-[10px] text-slate-400">
+          {rec.total_time && (
+            <span className="flex items-center">
+              <Clock className="w-3 h-3 mr-1" />
+              {rec.total_time}
+            </span>
+          )}
+          {rec.yield && <span>Serves {rec.yield}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SavedRecipesView({ recipes, activeRecipeId, onSelectRecipe, searchQuery }) {
   const filtered = recipes.filter((r) =>
     r.title.toLowerCase().includes(searchQuery.toLowerCase()),
   );
+  const synced = filtered.filter((r) => r.key_ingredients?.length > 0);
+  const unsynced = filtered.filter((r) => !(r.key_ingredients?.length > 0));
+
   return (
-    <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
-      {filtered.map((rec) => (
-        <div
-          key={rec.id}
-          onClick={() => onSelectRecipe(rec.id)}
-          className={`p-3.5 cursor-pointer transition-all ${
-            activeRecipeId === rec.id ? "bg-slate-100" : "hover:bg-slate-50"
-          }`}
-        >
-          {rec.favorite && (
-            <div className="flex justify-end mb-1">
-              <Heart className="w-3.5 h-3.5 text-rose-500 fill-rose-500" />
-            </div>
-          )}
-          <h3 className="text-xs font-bold text-slate-800">{rec.title}</h3>
-          {(rec.total_time || rec.yield) && (
-            <div className="flex items-center space-x-3 mt-2 text-[10px] text-slate-400">
-              {rec.total_time && (
-                <span className="flex items-center">
-                  <Clock className="w-3 h-3 mr-1" />
-                  {rec.total_time}
-                </span>
-              )}
-              {rec.yield && <span>Serves {rec.yield}</span>}
-            </div>
-          )}
+    <div className="flex-1 overflow-y-auto">
+      {synced.length > 0 && (
+        <div>
+          <h4 className="px-3.5 pt-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Synced ({synced.length})
+          </h4>
+          <div className="divide-y divide-slate-100">
+            {synced.map((rec) => (
+              <SavedRecipeRow
+                key={rec.id}
+                rec={rec}
+                activeRecipeId={activeRecipeId}
+                onSelectRecipe={onSelectRecipe}
+              />
+            ))}
+          </div>
         </div>
-      ))}
+      )}
+      {unsynced.length > 0 && (
+        <div>
+          <h4 className="px-3.5 pt-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Unsynced ({unsynced.length})
+          </h4>
+          <div className="divide-y divide-slate-100">
+            {unsynced.map((rec) => (
+              <SavedRecipeRow
+                key={rec.id}
+                rec={rec}
+                activeRecipeId={activeRecipeId}
+                onSelectRecipe={onSelectRecipe}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       {filtered.length === 0 && (
         <p className="p-3.5 text-xs text-slate-400">No saved recipes match that search.</p>
       )}

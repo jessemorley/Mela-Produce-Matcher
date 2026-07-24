@@ -57,32 +57,21 @@ still no linter or JS test suite.
    banner. Launch never calls Claude for recipe analysis.
 2. `analyze_new_recipes` — the "Sync Now" button. Sends every cached recipe
    with empty `key_ingredients` to Claude in a *single* batched call
-   (`build_key_ingredient_prompt`), asking for the 2-4 ingredients that
-   define each dish, ranked most-defining first — so asparagus in an
-   asparagus-and-tofu stir fry outranks a spring onion garnish. Parses the
-   `id: X — key: a, b, c` lines (`parse_key_ingredient_lines`, skipping
-   unparseable ones rather than failing the batch) and writes the results
-   back into `recipes.json`. This is the only place recipe analysis happens.
-3. `build_pantry` / `list_pantry` / `set_pantry_item` — the produce/pantry
-   split, which costs **no LLM call in normal use**. The staple list ships
-   with the app as `src/pantry_defaults.txt` (546 names, compiled in via
-   `include_str!`), generated once by running `build_pantry_prompt` over
-   this collection's 915 distinct ingredient names. Categorising is then a
-   set lookup: `ingredient_name` reduces a raw line to the item it names
-   (stripping quantities, units, prep words and trailing clauses, so "2
-   large cloves garlic, minced" and "1 garlic clove" both become "garlic"),
-   and a hit means pantry. Anything *not* in the set is produce — right for
-   nearly all unknowns, since produce is the open-ended category, and it
-   fails visibly rather than hiding a vegetable. `set_pantry_item` (the
-   per-row "move to pantry" / "confirm as produce" menu) writes
-   `pantry.json`, which then supersedes the defaults wholesale.
-   `build_pantry` still exists for a collection the defaults genuinely
-   don't fit — it classifies only the names not already covered and merges
-   them in — but **nothing calls it automatically**: on this collection 369
-   names are "unclassified" and almost all are real produce (apple,
-   asparagus, avocado), so running it would spend a call confirming what
-   the default already got right.
-4. `match_recipes` — **no Claude call.** Scores cached recipes locally
+   (`build_key_ingredient_prompt`), numbering each recipe's ingredient lines
+   and asking for two things per recipe: the 2-4 defining ingredients
+   ranked most-defining first (`key:` line, drives ranking exactly as
+   before), and, for *every* numbered line, a canonical singular `name` plus
+   `produce`/`pantry` (`N => name => produce|pantry` lines). A multi-item
+   line ("salt and pepper") gets one combined name rather than being split,
+   so the index mapping stays 1:1 with the stored `Vec<Ingredient>`.
+   `parse_key_ingredient_lines` parses both parts; a recipe is only marked
+   analysed if *every* ingredient index came back (checked by set equality
+   against `0..len`) — a partial response leaves the unread lines' `name`
+   empty (unfixed) rather than silently under-analysing the recipe. This is
+   the only place recipe analysis happens, and it's also where per-line
+   `name`/`pantry` get set — there is no separate pantry-classification call
+   any more.
+3. `match_recipes` — **no Claude call.** Scores cached recipes locally
    against the week's produce with `score_recipe`: a hit on the first key
    ingredient is worth 4, the second 3, and so on (floored at 1), so
    recipes *built around* in-season produce outrank ones that merely
@@ -97,11 +86,26 @@ still no linter or JS test suite.
    ("potato" != "sweet potato", "broccoli" != "broccolini"). Plain
    substring matching was the original rule and would rank a corned beef
    recipe as seasonal when corn is in season.
-5. `list_recipes` — returns the full local `recipes.json` as-is, for the
+4. `list_recipes` — returns the full local `recipes.json` as-is, for the
    frontend's "Saved Recipes" browse view (independent of any ranking).
 
 Only analysed recipes can ever match, since scoring reads `key_ingredients`
 exclusively. A fresh install shows zero matches until "Sync Now" runs.
+
+Each recipe's `ingredients` is a `Vec<Ingredient>` (`{ display, name,
+pantry }`), not a text blob. `display` is the raw Mela line verbatim;
+`name`/`pantry` are empty/false until Claude fills them in via
+`analyze_new_recipes`, and `name: ""` means "not analysed yet" — such lines
+are excluded from anything that reads `name`. `parse_ingredient_lines`
+builds the vector at Mela-sync time, dropping `# SECTION` headers and blank
+lines so no downstream reader has to. There used to be a Rust heuristic
+(`ingredient_name`) that reduced a raw line to a canonical name by stripping
+quantities/units/prep words, plus a shipped pantry-staple list
+(`pantry_defaults.txt`) it was checked against — both are gone. The
+heuristic mis-parsed enough real recipe lines (`"cups/173 gram all purpose
+flour"`, `"cups/6 ounce walnut halve and piece"`) that the fix was to stop
+guessing and let the same Claude call that already ranks key ingredients
+produce the canonical name and pantry/produce flag directly, per line.
 
 The frontend holds `feedTitle`/`fruit`/`vegetable`/ranked-recipe and
 `unanalyzedCount` state in `App.jsx` — there is no server-side session.
@@ -141,13 +145,10 @@ selected. `match_recipes` returns each ranked recipe flattened with its full
 record plus `score`/`matches`, so the detail pane needs no merging — it
 falls back to the Saved Recipes list only for recipes that never matched.
 `RecipeDetail.jsx` shows the stored `key_ingredients` as a "Built around"
-row, then the recipe text, then the ingredients below it in Produce and
-Pantry columns. It reimplements `ingredient_name` as `ingredientName` in JS
-to look each row up in the pantry set — the two must stay in step or a hand
-override silently never matches, so only the *ends* of a token are trimmed
-of punctuation (a blanket strip turns "jalapeños" into "jalapeo"). Mela's
-`# SECTION` header lines are dropped in the frontend rather than by Claude,
-since the `#` marker is reliable. `ArticleView.jsx` is a sanitized
+row, then the recipe text, then the ingredients below it split into Produce
+and Pantry columns by each ingredient's own `pantry` flag — no JS-side
+reimplementation of any Rust logic, since the backend now stores the
+classification directly. `ArticleView.jsx` is a sanitized
 in-app reader for the full newsletter post (`sanitizeArticle` strips
 scripts/styles/forms/dangerous attributes), toggled in place of the detail
 pane; external links inside it route through `open_url` to the system

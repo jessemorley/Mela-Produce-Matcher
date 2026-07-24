@@ -15,12 +15,25 @@ const CANCELLED: &str = "cancelled";
 #[derive(Default)]
 struct RunningChild(Mutex<Option<u32>>);
 
+// One ingredient line. `name`/`pantry` are LLM-produced by the key-ingredient
+// analysis call and empty/false until then; `name: ""` means "not analysed
+// yet" and excludes the line from matching. Carried across resync by
+// `merge_recipes` keyed on exact `display` match.
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
+struct Ingredient {
+    display: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    pantry: bool,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct Recipe {
     id: String,
     title: String,
     description: String,
-    ingredients: String,
+    ingredients: Vec<Ingredient>,
     // Added after the first release; serde(default) keeps an existing
     // recipes.json written without them loading instead of erroring.
     #[serde(default)]
@@ -35,6 +48,21 @@ struct Recipe {
     // carried across every resync by merge_recipes.
     #[serde(default)]
     key_ingredients: Vec<String>,
+}
+
+// Mela stores ingredients as one blob of newline-separated lines, with
+// "# SECTION" headers and blank lines mixed in. Those are dropped here at
+// sync time (per the handoff design) rather than filtered by every reader.
+fn parse_ingredient_lines(blob: &str) -> Vec<Ingredient> {
+    blob.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(|display| Ingredient {
+            display: display.to_string(),
+            name: String::new(),
+            pantry: false,
+        })
+        .collect()
 }
 
 fn mela_db_path() -> PathBuf {
@@ -68,7 +96,9 @@ fn load_recipes(db_path: &PathBuf) -> Result<Vec<Recipe>, String> {
                 id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 description: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                ingredients: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                ingredients: parse_ingredient_lines(
+                    &row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                ),
                 favorite: row.get::<_, Option<i64>>(4)?.unwrap_or(0) == 1,
                 total_time: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
                 yield_: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
@@ -145,104 +175,6 @@ fn fetch_latest_entry(feed_url: &str) -> Result<(String, String, String, String,
     Ok((title, strip_tags(&content_html), content_html, link, id))
 }
 
-/// Words stripped from the front of an ingredient line to find the item
-/// itself: quantities, units and prep words. Stripped repeatedly, so
-/// "2 large cloves garlic" reduces all the way down.
-const LEADING_NOISE: &[&str] = &[
-    "cup", "cups", "tbsp", "tbsps", "tsp", "tsps", "tablespoon", "tablespoons", "teaspoon",
-    "teaspoons", "pound", "pounds", "lb", "lbs", "ounce", "ounces", "oz", "gram", "grams", "g",
-    "kg", "ml", "l", "litre", "litres", "clove", "cloves", "can", "cans", "tin", "tins", "bunch",
-    "bunches", "sprig", "sprigs", "slice", "slices", "pinch", "pinches", "handful", "handfuls",
-    "package", "packages", "large", "medium", "small", "whole", "of", "fresh", "freshly", "dried",
-    "ground", "chopped", "minced", "diced", "sliced", "grated", "toasted", "raw", "ripe", "extra",
-    "virgin", "to",
-];
-
-/// Reduces a raw ingredient line ("2 large cloves garlic, minced") to the
-/// item it names ("garlic"), so the same item written different ways lands
-/// on one vocabulary entry and one pantry decision.
-///
-/// ponytail: prefix-stripping, not a parser. It handles the shapes Mela
-/// recipes actually use — leading quantity, unit, prep word, and a trailing
-/// clause after a comma or bracket. A line it can't reduce keeps more of its
-/// text and just becomes its own vocabulary entry: a miss in the pantry
-/// lookup (so the item shows as produce), never a crash. Roughly a fifth of
-/// this collection's lines are long freeform prose like "for serving
-/// basmati or jasmine rice"; those are the misses, and the per-ingredient
-/// override menu is how they get fixed.
-fn ingredient_name(line: &str) -> String {
-    let mut s = line.to_lowercase().replace("&nbsp;", " ");
-    // Drop bracketed asides — Mela writes prep notes as "((thoroughly washed))".
-    while let (Some(open), Some(close)) = (s.find('('), s.rfind(')')) {
-        if open >= close {
-            break;
-        }
-        s.replace_range(open..=close, " ");
-    }
-    // Keep only the head clause: "garlic, minced" -> "garlic".
-    let head = s.split(',').next().unwrap_or(&s).to_string();
-    // Split on hyphens as well as whitespace so "extra-virgin olive oil"
-    // strips the same way as "extra virgin olive oil".
-    let mut words: Vec<&str> = head
-        .split(|c: char| c.is_whitespace() || c == '-')
-        .filter(|w| !w.is_empty())
-        .collect();
-    while let Some(first) = words.first() {
-        let w = first.trim_matches(|c: char| !c.is_alphanumeric());
-        // A token with no letters is a quantity ("2", "1/4", "200g" keeps
-        // its unit so it is handled by the noise list after the digits go).
-        let is_quantity = w.chars().all(|c| !c.is_alphabetic());
-        let unit_suffix = w.trim_start_matches(|c: char| !c.is_alphabetic());
-        if is_quantity || LEADING_NOISE.contains(&w) || LEADING_NOISE.contains(&unit_suffix) {
-            words.remove(0);
-        } else {
-            break;
-        }
-    }
-    words
-        .iter()
-        .map(|w| singular(w.trim_matches(|c: char| !c.is_alphanumeric())))
-        .filter(|w| !w.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Every distinct ingredient name across the collection, excluding Mela's
-/// "# SECTION" header lines. This is the vocabulary the pantry set is built
-/// from and looked up against.
-fn ingredient_vocabulary(recipes: &[Recipe]) -> Vec<String> {
-    let mut names: Vec<String> = recipes
-        .iter()
-        .flat_map(|r| r.ingredients.lines())
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(ingredient_name)
-        .filter(|n| !n.is_empty())
-        .collect();
-    names.sort();
-    names.dedup();
-    names
-}
-
-fn build_pantry_prompt(names: &[String]) -> String {
-    let list = names.join("\n");
-    format!(
-        "Here is every distinct ingredient in a home cook's recipe collection,\n\
-        one per line:\n\n\
-        {list}\n\n\
-        List the ones that are PANTRY items — things kept in the cupboard or\n\
-        fridge and bought occasionally rather than shopped for fresh each week:\n\
-        salt, pepper, oils, vinegars, flour, sugar, sweeteners, spices, dried\n\
-        herbs, stock, tinned goods, sauces, condiments, nuts, seeds, grains,\n\
-        pasta, rice, tofu, beans and pulses, dairy, eggs and water.\n\n\
-        Do NOT list fresh produce: vegetables, fruit, fresh herbs, salad leaves,\n\
-        mushrooms — anything bought fresh from the greengrocer. Judge the item\n\
-        itself: \"onion\" is fresh produce, \"onion powder\" is pantry.\n\n\
-        Output the pantry items only, one per line, copied exactly as spelled\n\
-        above, nothing else."
-    )
-}
-
 fn build_produce_prompt(entry_title: &str, entry_text: &str) -> String {
     format!(
         "Here is this week's seasonal produce newsletter, \"{entry_title}\":\n\n\
@@ -266,56 +198,97 @@ fn build_key_ingredient_prompt(recipes: &[Recipe]) -> String {
     let recipe_lines = recipes
         .iter()
         .map(|r| {
+            let numbered = r
+                .ingredients
+                .iter()
+                .enumerate()
+                .map(|(i, ing)| format!("  {i}: {}", ing.display))
+                .collect::<Vec<_>>()
+                .join("\n");
             format!(
-                "- [{}] {} — {}: {}",
-                r.id,
-                r.title,
-                r.description,
-                r.ingredients.replace('\n', "; ")
+                "[{}] {} — {}\n{numbered}",
+                r.id, r.title, r.description
             )
         })
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n\n");
 
     format!(
-        "Here are recipes from a home cook's collection (id, title, description,\n\
-        ingredients):\n\n\
+        "Here are recipes from a home cook's collection, each with its\n\
+        numbered ingredient lines:\n\n\
         {recipe_lines}\n\n\
-        For each recipe, identify the 2-4 ingredients that actually define the\n\
-        dish — the ones a shopper would build the meal around. Rank them\n\
-        most-defining first. In \"asparagus and tofu stir fry\" the key\n\
-        ingredients are asparagus and tofu; a spring onion garnish, oil,\n\
-        salt, and pantry staples are NOT key ingredients. Prefer fresh produce\n\
-        and proteins over seasonings and condiments. Use short singular\n\
-        ingredient names (\"asparagus\", not \"2 bunches trimmed asparagus\").\n\n\
-        Output one line per recipe, in exactly this format, nothing else:\n\n\
-        id: RECIPE_ID — key: ingredient, ingredient, ingredient"
+        For each recipe, do two things:\n\n\
+        1. Identify the 2-4 ingredients that actually define the dish — the\n\
+        ones a shopper would build the meal around. Rank them most-defining\n\
+        first. In \"asparagus and tofu stir fry\" the key ingredients are\n\
+        asparagus and tofu; a spring onion garnish, oil, salt, and pantry\n\
+        staples are NOT key ingredients. Prefer fresh produce and proteins\n\
+        over seasonings and condiments. Use short singular ingredient names\n\
+        (\"asparagus\", not \"2 bunches trimmed asparagus\").\n\n\
+        2. For EVERY numbered ingredient line (all of them, in order), give\n\
+        its canonical short singular name and whether it is a pantry staple\n\
+        (kept in the cupboard/fridge, bought occasionally — oils, spices,\n\
+        flour, tinned goods, dairy) or produce (fresh, bought weekly —\n\
+        vegetables, fruit, fresh herbs, meat, fish). A line naming two\n\
+        ingredients (\"salt and pepper\") gets ONE combined name, do not\n\
+        split it into two lines.\n\n\
+        Output in exactly this format, nothing else:\n\n\
+        id: RECIPE_ID\n\
+        key: ingredient, ingredient, ingredient\n\
+        0 => name => produce\n\
+        1 => name => pantry\n\
+        (one numbered line per ingredient, covering every index)"
     )
 }
 
-/// Parses the `id: X — key: a, b, c` lines back into (id, key_ingredients).
-/// Unparseable lines (stray commentary) are skipped rather than failing the
-/// whole batch — a recipe that misses out just stays unanalysed and gets
-/// picked up by the next sync.
-fn parse_key_ingredient_lines(answer: &str) -> Vec<(String, Vec<String>)> {
-    answer
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim().trim_start_matches('-').trim();
-            let rest = line.strip_prefix("id:")?;
-            let (id, keys) = rest.split_once("—").or_else(|| rest.split_once(" - "))?;
-            let keys = keys.trim().strip_prefix("key:")?;
-            let keys: Vec<String> = keys
-                .split(',')
-                .map(|s| s.trim().to_lowercase())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if keys.is_empty() {
-                return None;
+/// Parses one recipe's analysis block: the `key:` line and every `n =>
+/// name => produce|pantry` line. Returns (id, key_ingredients, per-index
+/// name+pantry). An index line with more than two `=>` still parses — only
+/// the first two split points matter, so a name containing "=>" is the sole
+/// unhandled edge case, and it isn't one real ingredient names produce.
+fn parse_key_ingredient_lines(
+    answer: &str,
+) -> Vec<(String, Vec<String>, Vec<(usize, String, bool)>)> {
+    let mut out = Vec::new();
+    let mut current: Option<(String, Vec<String>, Vec<(usize, String, bool)>)> = None;
+
+    for raw_line in answer.lines() {
+        let line = raw_line.trim().trim_start_matches('-').trim();
+        if let Some(rest) = line.strip_prefix("id:") {
+            if let Some(done) = current.take() {
+                out.push(done);
             }
-            Some((id.trim().to_string(), keys))
-        })
-        .collect()
+            current = Some((rest.trim().to_string(), Vec::new(), Vec::new()));
+        } else if let Some(rest) = line.strip_prefix("key:") {
+            if let Some((_, keys, _)) = current.as_mut() {
+                *keys = rest
+                    .split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+        } else if let Some((_, _, indexed)) = current.as_mut() {
+            let mut parts = line.splitn(3, "=>");
+            let (Some(idx), Some(name), Some(kind)) =
+                (parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            let Ok(idx) = idx.trim().parse::<usize>() else {
+                continue;
+            };
+            let name = name.trim().to_lowercase();
+            if name.is_empty() {
+                continue;
+            }
+            let pantry = kind.trim().eq_ignore_ascii_case("pantry");
+            indexed.push((idx, name, pantry));
+        }
+    }
+    if let Some(done) = current.take() {
+        out.push(done);
+    }
+    out
 }
 
 /// Strips a trailing plural so "potatoes" and "potato" compare equal.
@@ -381,20 +354,32 @@ fn score_recipe(recipe: &Recipe, produce: &[String]) -> (u32, Vec<String>) {
     (score, matched)
 }
 
-/// Carries analysed key_ingredients across a full Mela resync. `fresh` comes
-/// straight from SQLite with empty key_ingredients; anything already
-/// analysed in the old cache keeps its list, so only genuinely new recipes
-/// come out unanalysed.
+/// Carries analysed key_ingredients and per-line name/pantry across a full
+/// Mela resync. `fresh` comes straight from SQLite with empty analysis;
+/// anything already analysed in the old cache keeps it, so only genuinely
+/// new recipes (or new/edited ingredient lines) come out unanalysed.
+///
+/// Ingredient lines carry by exact `display` match, first-unused-wins on
+/// duplicate display lines within a recipe — a line whose text changed in
+/// Mela has no match and falls back to unfixed (`name: ""`), which is
+/// correct: an edited line needs re-analysis.
 fn merge_recipes(fresh: Vec<Recipe>, cached: &[Recipe]) -> Vec<Recipe> {
-    let known: HashMap<&str, &Vec<String>> = cached
-        .iter()
-        .map(|r| (r.id.as_str(), &r.key_ingredients))
-        .collect();
+    let cached_by_id: HashMap<&str, &Recipe> =
+        cached.iter().map(|r| (r.id.as_str(), r)).collect();
     fresh
         .into_iter()
         .map(|mut r| {
-            if let Some(keys) = known.get(r.id.as_str()) {
-                r.key_ingredients = (*keys).clone();
+            let Some(old) = cached_by_id.get(r.id.as_str()) else {
+                return r;
+            };
+            r.key_ingredients = old.key_ingredients.clone();
+            let mut old_ingredients = old.ingredients.clone();
+            for ing in r.ingredients.iter_mut() {
+                if let Some(pos) = old_ingredients.iter().position(|o| o.display == ing.display) {
+                    let old = old_ingredients.remove(pos);
+                    ing.name = old.name;
+                    ing.pantry = old.pantry;
+                }
             }
             r
         })
@@ -415,6 +400,23 @@ fn run_claude(
             "-p",
             "--model",
             CLAUDE_MODEL,
+            // Default effort spends ~20s deliberating before the first
+            // token (measured via ttft_ms on this app's real batch
+            // prompts) even though the task is pure extraction/classification,
+            // not reasoning. low cuts that to ~1-2s with no quality drop
+            // observed on this prompt shape.
+            "--effort",
+            "low",
+            // The process inherits this app's own working directory, which
+            // is inside a Claude Code project — without this, the CLI loads
+            // ~/.claude's user-level settings (including any globally
+            // enabled plugins) and can inject an unrelated system prompt via
+            // a SessionStart hook, which has been observed to break the
+            // rigid id:/key:/N=>name=>kind output format this call depends
+            // on. Loading no settings sources keeps this call a clean,
+            // isolated completion.
+            "--setting-sources",
+            "",
             "--output-format",
             "stream-json",
             "--include-partial-messages",
@@ -546,47 +548,6 @@ fn recipes_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("recipes.json"))
 }
 
-fn pantry_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    Ok(app_data_dir(app)?.join("pantry.json"))
-}
-
-/// Pantry staples shipped with the app, so a fresh install categorises
-/// ingredients correctly without any LLM call at all. Generated by running
-/// `build_pantry_prompt` over this collection's ~915 distinct ingredient
-/// names and keeping the answers that matched the vocabulary exactly.
-///
-/// ponytail: a baked-in list, not a lookup service. It only has to cover
-/// the ingredients people actually cook with; anything it misses falls to
-/// `build_pantry` (once) or the per-row override (forever).
-const DEFAULT_PANTRY: &str = include_str!("pantry_defaults.txt");
-
-fn default_pantry() -> Vec<String> {
-    DEFAULT_PANTRY
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect()
-}
-
-/// The pantry vocabulary: ingredient names (as produced by
-/// `ingredient_name`) that are cupboard staples rather than fresh produce.
-/// Starts as the baked-in `DEFAULT_PANTRY`, is extended once by
-/// `build_pantry` for names the defaults don't cover, and is corrected by
-/// hand from the detail pane after that.
-fn load_pantry(app: &tauri::AppHandle) -> Vec<String> {
-    pantry_path(app)
-        .ok()
-        .and_then(|p| std::fs::read(p).ok())
-        .and_then(|b| serde_json::from_slice::<Vec<String>>(&b).ok())
-        .unwrap_or_else(default_pantry)
-}
-
-fn save_pantry(app: &tauri::AppHandle, pantry: &[String]) -> Result<(), String> {
-    let path = pantry_path(app)?;
-    let json = serde_json::to_string_pretty(pantry).map_err(|e| e.to_string())?;
-    std::fs::write(path, json).map_err(|e| e.to_string())
-}
-
 /// A missing or corrupt cache file is just a cache miss, never a hard error.
 fn load_produce_cache(app: &tauri::AppHandle) -> Option<ProduceCache> {
     let path = produce_cache_path(app).ok()?;
@@ -624,10 +585,6 @@ struct SyncResult {
     /// Recipes in the cache with no key_ingredients yet — what the "Sync
     /// Now" button offers to analyse.
     unanalyzed_count: usize,
-    /// Ingredient names the pantry set says nothing about. These render as
-    /// produce, which is correct for nearly all of them, so this is a
-    /// diagnostic rather than a prompt to call `build_pantry`.
-    unclassified_count: usize,
 }
 
 /// Runs on app launch: refreshes the produce cache only if the newsletter
@@ -717,7 +674,6 @@ async fn sync_on_launch(
         produce_from_cache,
         recipe_count: recipes.len(),
         unanalyzed_count,
-        unclassified_count: unclassified_ingredients(&recipes, &load_pantry(&app)).len(),
     })
 }
 
@@ -744,19 +700,55 @@ async fn analyze_new_recipes(
         "status",
         format!("Analysing {} new recipes...", pending.len()),
     );
-    let answer = run_claude(&build_key_ingredient_prompt(&pending), &running, |_| {})?;
-    let parsed: HashMap<String, Vec<String>> =
-        parse_key_ingredient_lines(&answer).into_iter().collect();
+    let titles: HashMap<&str, &str> = pending
+        .iter()
+        .map(|r| (r.id.as_str(), r.title.as_str()))
+        .collect();
+    let total = pending.len();
+    let mut seen = 0;
+    let answer = run_claude(&build_key_ingredient_prompt(&pending), &running, |line| {
+        // Each recipe block starts with its "id:" line as soon as it
+        // streams back, so this fires once per recipe in the batch, in
+        // order — real-time per-recipe progress without splitting the call
+        // (the "id:" line arrives before that recipe's own lines, so this
+        // reports the recipe now being analysed, not yet finished).
+        let Some(id) = line.trim().strip_prefix("id:") else {
+            return;
+        };
+        seen += 1;
+        let title = titles.get(id.trim()).copied().unwrap_or(id.trim());
+        let _ = app.emit("status", format!("Analysing {seen}/{total}: {title}"));
+    })?;
+    let parsed: HashMap<String, (Vec<String>, Vec<(usize, String, bool)>)> =
+        parse_key_ingredient_lines(&answer)
+            .into_iter()
+            .map(|(id, keys, indexed)| (id, (keys, indexed)))
+            .collect();
     if parsed.is_empty() {
         return Err("Claude returned no usable key ingredients".to_string());
     }
 
     let mut analyzed = 0;
     for recipe in recipes.iter_mut() {
-        if let Some(keys) = parsed.get(&recipe.id) {
-            recipe.key_ingredients = keys.clone();
-            analyzed += 1;
+        let Some((keys, indexed)) = parsed.get(&recipe.id) else {
+            continue;
+        };
+        // Only mark the recipe done if every ingredient line came back —
+        // a partial response leaves the unread lines unfixed (name: "")
+        // rather than silently under-analysing the recipe.
+        let complete = indexed.len() == recipe.ingredients.len()
+            && (0..recipe.ingredients.len()).all(|i| indexed.iter().any(|(idx, ..)| *idx == i));
+        if !complete {
+            continue;
         }
+        recipe.key_ingredients = keys.clone();
+        for (idx, name, pantry) in indexed {
+            if let Some(ing) = recipe.ingredients.get_mut(*idx) {
+                ing.name = name.clone();
+                ing.pantry = *pantry;
+            }
+        }
+        analyzed += 1;
     }
     save_recipes_cache(&app, &recipes)?;
 
@@ -809,99 +801,6 @@ fn match_recipes(
 
     let _ = app.emit("status", format!("{} recipes match.", ranked.len()));
     Ok(ranked)
-}
-
-/// Ingredient names in the collection that the current pantry set says
-/// nothing about — the only thing `build_pantry` needs to ask Claude. Empty
-/// for a collection the baked-in defaults already cover, which is the
-/// common case and means no LLM call at all.
-fn unclassified_ingredients(recipes: &[Recipe], pantry: &[String]) -> Vec<String> {
-    let known: std::collections::HashSet<&str> = pantry.iter().map(|s| s.as_str()).collect();
-    ingredient_vocabulary(recipes)
-        .into_iter()
-        .filter(|name| !known.contains(name.as_str()))
-        .collect()
-}
-
-/// Classifies the ingredients the stored pantry set doesn't cover yet, in
-/// one Claude call, and merges the staples into `pantry.json`. Usually does
-/// nothing: the baked-in `DEFAULT_PANTRY` already covers a typical
-/// collection, and hand corrections handle the rest.
-#[tauri::command]
-async fn build_pantry(
-    app: tauri::AppHandle,
-    running: State<'_, RunningChild>,
-) -> Result<usize, String> {
-    let recipes = load_recipes_cache(&app)
-        .ok_or_else(|| "No cached recipes — sync hasn't run yet".to_string())?;
-    let existing = load_pantry(&app);
-    let vocabulary = unclassified_ingredients(&recipes, &existing);
-    if vocabulary.is_empty() {
-        // Nothing new to judge, but persist the defaults so the set is a
-        // real file the override menu can edit.
-        save_pantry(&app, &existing)?;
-        return Ok(0);
-    }
-
-    let _ = app.emit(
-        "status",
-        format!("Categorising {} new ingredients...", vocabulary.len()),
-    );
-    let answer = run_claude(&build_pantry_prompt(&vocabulary), &running, |_| {})?;
-
-    // Keep only names that were in the vocabulary, so a reworded or invented
-    // line can't enter the set and sit there unmatched forever.
-    let known: std::collections::HashSet<&str> = vocabulary.iter().map(|s| s.as_str()).collect();
-    let added: Vec<String> = answer
-        .lines()
-        .map(|l| l.trim().trim_start_matches('-').trim().to_lowercase())
-        .filter(|l| known.contains(l.as_str()))
-        .collect();
-
-    let mut pantry = existing;
-    pantry.extend(added.iter().cloned());
-    pantry.sort();
-    pantry.dedup();
-    save_pantry(&app, &pantry)?;
-
-    let _ = app.emit(
-        "status",
-        format!("Pantry: {} staples ({} newly categorised).", pantry.len(), added.len()),
-    );
-    Ok(added.len())
-}
-
-#[tauri::command]
-fn list_pantry(app: tauri::AppHandle) -> Result<Vec<String>, String> {
-    Ok(load_pantry(&app))
-}
-
-/// Moves one ingredient into or out of the pantry set — the per-row
-/// "move to pantry" / "confirm as produce" menu. This is the only way the
-/// set changes after the initial build.
-#[tauri::command]
-fn set_pantry_item(
-    app: tauri::AppHandle,
-    ingredient: String,
-    is_pantry: bool,
-) -> Result<Vec<String>, String> {
-    let name = ingredient_name(&ingredient);
-    if name.is_empty() {
-        return Err("Not an ingredient".to_string());
-    }
-    let mut pantry = load_pantry(&app);
-    match (is_pantry, pantry.iter().position(|p| *p == name)) {
-        (true, None) => {
-            pantry.push(name);
-            pantry.sort();
-        }
-        (false, Some(i)) => {
-            pantry.remove(i);
-        }
-        _ => return Ok(pantry), // already in the requested state
-    }
-    save_pantry(&app, &pantry)?;
-    Ok(pantry)
 }
 
 #[tauri::command]
@@ -970,7 +869,10 @@ mod tests {
             id: "abc".into(),
             title: "Fig Salad".into(),
             description: "A salad".into(),
-            ingredients: "figs\ngoat cheese".into(),
+            ingredients: vec![
+                ing("figs", "fig", false),
+                ing("goat cheese", "goat cheese", true),
+            ],
             favorite: true,
             total_time: "25min".into(),
             yield_: "2".into(),
@@ -980,11 +882,26 @@ mod tests {
         let parsed: Vec<Recipe> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].title, "Fig Salad");
-        assert_eq!(parsed[0].ingredients, "figs\ngoat cheese");
+        assert_eq!(parsed[0].ingredients.len(), 2);
+        assert_eq!(parsed[0].ingredients[0].display, "figs");
+        assert_eq!(parsed[0].ingredients[0].name, "fig");
+        assert!(parsed[0].ingredients[1].pantry);
         assert!(parsed[0].favorite);
         assert_eq!(parsed[0].total_time, "25min");
         assert_eq!(parsed[0].yield_, "2");
         assert_eq!(parsed[0].key_ingredients, vec!["figs".to_string()]);
+    }
+
+    fn ing(display: &str, name: &str, pantry: bool) -> Ingredient {
+        Ingredient {
+            display: display.into(),
+            name: name.into(),
+            pantry,
+        }
+    }
+
+    fn unfixed(display: &str) -> Ingredient {
+        ing(display, "", false)
     }
 
     fn recipe(id: &str, title: &str, keys: &[&str]) -> Recipe {
@@ -992,7 +909,7 @@ mod tests {
             id: id.into(),
             title: title.into(),
             description: String::new(),
-            ingredients: String::new(),
+            ingredients: Vec::new(),
             favorite: false,
             total_time: String::new(),
             yield_: String::new(),
@@ -1001,17 +918,34 @@ mod tests {
     }
 
     #[test]
-    fn parses_key_ingredient_lines_and_skips_commentary() {
+    fn parses_key_and_indexed_lines_and_skips_commentary() {
         let answer = "Here are the results:\n\
-                      id: abc — key: Asparagus, Tofu\n\
-                      - id: def — key: fig, goat cheese\n\
-                      that's everything!";
+                      id: abc\n\
+                      key: Asparagus, Tofu\n\
+                      0 => asparagus => produce\n\
+                      1 => tofu => pantry\n\
+                      that's everything!\n\
+                      id: def\n\
+                      key: fig, goat cheese\n\
+                      0 => fig => produce\n\
+                      1 => goat cheese => pantry";
         let parsed = parse_key_ingredient_lines(answer);
         assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0].0, "abc");
+        let (id, keys, indexed) = &parsed[0];
+        assert_eq!(id, "abc");
         // Lowercased so scoring can compare against produce names directly.
-        assert_eq!(parsed[0].1, vec!["asparagus", "tofu"]);
+        assert_eq!(keys, &vec!["asparagus", "tofu"]);
+        assert_eq!(indexed, &vec![(0, "asparagus".to_string(), false), (1, "tofu".to_string(), true)]);
         assert_eq!(parsed[1].0, "def");
+    }
+
+    // A line naming two ingredients ("salt and pepper") must not be split —
+    // the index-completeness check depends on a strict 1:1 line mapping.
+    #[test]
+    fn parses_a_comma_in_the_name_without_splitting_it() {
+        let answer = "id: abc\nkey: salt\n0 => salt, pepper => pantry";
+        let parsed = parse_key_ingredient_lines(answer);
+        assert_eq!(parsed[0].2, vec![(0, "salt, pepper".to_string(), true)]);
     }
 
     // The whole point of the redesign: a recipe built around in-season
@@ -1085,85 +1019,16 @@ mod tests {
         assert!(produce_matches("sweet potato", "sweet potatoes"));
     }
 
-    // The vocabulary only collapses variants if quantities, units and prep
-    // words are stripped the same way every time.
+    // Mela's "# SECTION" header lines and blank lines are dropped at parse
+    // time, not by every reader downstream.
     #[test]
-    fn ingredient_name_reduces_a_line_to_the_item() {
-        assert_eq!(ingredient_name("2 large cloves garlic, minced"), "garlic");
-        assert_eq!(ingredient_name("3 Tbsp olive oil"), "olive oil");
-        assert_eq!(ingredient_name("1 medium onion ((diced))"), "onion");
+    fn parse_ingredient_lines_skips_headers_and_blanks() {
+        let parsed = parse_ingredient_lines("# FILLING\n2 cloves garlic\n\n1 Tbsp olive oil\n");
         assert_eq!(
-            ingredient_name("3 pounds yukon gold potatoes, partially peeled"),
-            "yukon gold potato"
+            parsed.iter().map(|i| i.display.as_str()).collect::<Vec<_>>(),
+            vec!["2 cloves garlic", "1 Tbsp olive oil"]
         );
-        // Variants of one item must land on the same name.
-        assert_eq!(
-            ingredient_name("2 garlic cloves"),
-            ingredient_name("1 garlic clove")
-        );
-        assert_eq!(
-            ingredient_name("1/4 cup extra-virgin olive oil"),
-            ingredient_name("2 tbsp extra virgin olive oil")
-        );
-        // A line it can't reduce keeps its text rather than emptying out —
-        // a pantry miss, not a crash.
-        assert!(!ingredient_name("Sea salt and black pepper").is_empty());
-    }
-
-    // ingredientName() in RecipeDetail.jsx reimplements this to look rows up
-    // in the pantry set, so the two must agree or an override never matches.
-    // These are the shapes where a naive JS port diverged: non-ASCII letters
-    // and inner punctuation must survive, since only the ends are trimmed.
-    #[test]
-    fn ingredient_name_keeps_inner_punctuation_and_non_ascii() {
-        assert_eq!(ingredient_name("1 or 2 jalapeños, sliced"), "or 2 jalapeño");
-        assert_eq!(ingredient_name("Cream and/or olive oil"), "cream and/or olive oil");
-        assert!(ingredient_name("3 tablespoons/52 grams tamari").contains('/'));
-    }
-
-    // The shipped list is what makes a fresh install free: it has to be
-    // non-trivial, reduced to bare names, and free of fresh produce.
-    #[test]
-    fn default_pantry_is_usable_out_of_the_box() {
-        let pantry = default_pantry();
-        assert!(pantry.len() > 400, "got {} entries", pantry.len());
-        for staple in ["salt", "olive oil", "flour", "soy sauce", "cumin"] {
-            assert!(pantry.iter().any(|p| p == staple), "missing {staple}");
-        }
-        for fresh in ["garlic", "onion", "lemon", "kale", "mushroom"] {
-            assert!(!pantry.iter().any(|p| p == fresh), "{fresh} is not pantry");
-        }
-        // Entries must be in ingredient_name form or lookups never hit.
-        for entry in pantry.iter().take(50) {
-            assert_eq!(*entry, entry.to_lowercase());
-        }
-    }
-
-    // The whole point of shipping defaults: a collection they already cover
-    // asks Claude nothing.
-    #[test]
-    fn unclassified_is_empty_when_defaults_cover_the_collection() {
-        let mut r = recipe("a", "Simple", &[]);
-        r.ingredients = "1 tsp salt\n2 Tbsp olive oil".into();
-        assert!(unclassified_ingredients(&[r], &default_pantry()).is_empty());
-
-        let mut novel = recipe("b", "Novel", &[]);
-        novel.ingredients = "1 tsp salt\n2 Tbsp fictitiousspice".into();
-        assert_eq!(
-            unclassified_ingredients(&[novel], &default_pantry()),
-            vec!["fictitiousspice"]
-        );
-    }
-
-    #[test]
-    fn vocabulary_is_deduplicated_and_skips_section_headers() {
-        let mut a = recipe("a", "One", &[]);
-        a.ingredients = "# FILLING\n2 cloves garlic\n1 Tbsp olive oil".into();
-        let mut b = recipe("b", "Two", &[]);
-        b.ingredients = "1 clove garlic, minced\n\n3 cups flour".into();
-
-        let vocab = ingredient_vocabulary(&[a, b]);
-        assert_eq!(vocab, vec!["flour", "garlic", "olive oil"]);
+        assert!(parsed.iter().all(|i| i.name.is_empty() && !i.pantry));
     }
 
     #[test]
@@ -1176,33 +1041,51 @@ mod tests {
         assert!(matches.is_empty());
     }
 
-    // A resync must not wipe analysis: known ids keep their key ingredients,
-    // genuinely new ones come out empty so "Sync Now" picks them up.
+    // A resync must not wipe analysis: known ids keep their key ingredients
+    // and per-line name/pantry (carried by exact display match), genuinely
+    // new ones come out empty so "Sync Now" picks them up.
     #[test]
     fn merge_preserves_analysis_and_leaves_new_recipes_unanalysed() {
-        let cached = vec![recipe("a", "Asparagus Stir Fry", &["asparagus", "tofu"])];
-        let fresh = vec![
-            recipe("a", "Asparagus Stir Fry", &[]),
-            recipe("b", "Brand New Recipe", &[]),
-        ];
+        let mut analysed = recipe("a", "Asparagus Stir Fry", &["asparagus", "tofu"]);
+        analysed.ingredients = vec![ing("asparagus", "asparagus", false), ing("tofu", "tofu", false)];
+        let cached = vec![analysed];
+
+        let mut fresh_a = recipe("a", "Asparagus Stir Fry", &[]);
+        fresh_a.ingredients = vec![unfixed("asparagus"), unfixed("tofu")];
+        let fresh = vec![fresh_a, recipe("b", "Brand New Recipe", &[])];
+
         let merged = merge_recipes(fresh, &cached);
         assert_eq!(merged[0].key_ingredients, vec!["asparagus", "tofu"]);
+        assert_eq!(merged[0].ingredients[0].name, "asparagus");
+        assert_eq!(merged[0].ingredients[1].name, "tofu");
         assert!(merged[1].key_ingredients.is_empty());
-        assert_eq!(
-            merged.iter().filter(|r| r.key_ingredients.is_empty()).count(),
-            1
-        );
+    }
+
+    // A line whose display text changed in Mela has no exact match in the
+    // old cache and must fall back to unfixed, not carry a stale name.
+    #[test]
+    fn merge_leaves_edited_lines_unfixed() {
+        let mut old = recipe("a", "Salad", &[]);
+        old.ingredients = vec![ing("1 onion", "onion", false)];
+        let cached = vec![old];
+
+        let mut new = recipe("a", "Salad", &[]);
+        new.ingredients = vec![unfixed("2 onions")]; // display text changed
+        let merged = merge_recipes(vec![new], &cached);
+        assert_eq!(merged[0].ingredients[0].name, "");
     }
 
     // A recipes.json written before favorite/total_time/yield existed must
     // still load rather than failing the whole cache read.
     #[test]
     fn recipes_cache_loads_pre_metadata_json() {
-        let json = r#"[{"id":"abc","title":"Fig Salad","description":"A salad","ingredients":"figs"}]"#;
+        let json = r#"[{"id":"abc","title":"Fig Salad","description":"A salad","ingredients":[{"display":"figs"}]}]"#;
         let parsed: Vec<Recipe> = serde_json::from_str(json).unwrap();
         assert_eq!(parsed[0].title, "Fig Salad");
         assert!(!parsed[0].favorite);
         assert_eq!(parsed[0].total_time, "");
+        assert_eq!(parsed[0].ingredients[0].display, "figs");
+        assert_eq!(parsed[0].ingredients[0].name, "");
     }
 
     // The cache-hit/miss decision in sync_on_launch turns on this exact
@@ -1233,9 +1116,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             sync_on_launch,
             analyze_new_recipes,
-            build_pantry,
-            list_pantry,
-            set_pantry_item,
             match_recipes,
             list_recipes,
             cancel,

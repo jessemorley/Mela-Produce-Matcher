@@ -25,7 +25,6 @@ export default function App() {
   const [allRecipes, setAllRecipes] = useState([]); // full local recipes.json, for "Saved Recipes"
   const [activeRecipeId, setActiveRecipeId] = useState(null);
   const [unanalyzedCount, setUnanalyzedCount] = useState(0);
-  const [pantry, setPantry] = useState([]); // ingredient names classed as pantry staples
 
   // Launch-time sync: fetch cached-or-fresh produce, resync recipes.json from Mela.
   useEffect(() => {
@@ -43,11 +42,6 @@ export default function App() {
         setProduce(result.produce);
         setRecipeCount(result.recipe_count);
         setUnanalyzedCount(result.unanalyzed_count);
-        // The pantry set ships with the app, so this is only ever a read —
-        // nothing calls build_pantry on launch. Unknown ingredients default
-        // to produce, which is right for almost all of them, and the
-        // per-row override fixes the rest permanently.
-        loadPantry();
         return invoke("list_recipes");
       })
       .then((recipes) => setAllRecipes(recipes ?? []))
@@ -95,12 +89,6 @@ export default function App() {
 
   // "Sync Now": run the Claude key-ingredient analysis over recipes the
   // launch sync found unanalysed, then refresh the local list.
-  function loadPantry() {
-    invoke("list_pantry")
-      .then((items) => setPantry(items ?? []))
-      .catch(() => {});
-  }
-
   async function analyzeNew() {
     setBusy(true);
     try {
@@ -153,11 +141,7 @@ export default function App() {
               onBack={() => setShowArticle(false)}
             />
           ) : activeRecipe ? (
-            <RecipeDetail
-              recipe={activeRecipe}
-              pantry={pantry}
-              onPantryChange={setPantry}
-            />
+            <RecipeDetail recipe={activeRecipe} />
           ) : (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm gap-2">
               <Leaf className="w-8 h-8" />
