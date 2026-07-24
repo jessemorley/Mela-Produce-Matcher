@@ -14,6 +14,7 @@ export default function App() {
   const [busy, setBusy] = useState(true);
   const [selectedNav, setSelectedNav] = useState("matching"); // 'matching' | 'produce' | 'recipes'
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedTag, setSelectedTag] = useState(null);
   const [showArticle, setShowArticle] = useState(false);
 
   const [feedTitle, setFeedTitle] = useState("");
@@ -67,6 +68,20 @@ export default function App() {
   // Ranked recipes already carry their full record from the backend, so a
   // selection only needs the Saved Recipes list as a fallback for recipes
   // that never matched.
+  // Mela's own tags (ZRECIPETAG), already loaded onto every recipe — counts
+  // recipes per tag so the sidebar can show them alongside each category.
+  const categories = useMemo(() => {
+    const counts = new Map();
+    for (const r of allRecipes) {
+      for (const tag of r.tags || []) {
+        counts.set(tag, (counts.get(tag) || 0) + 1);
+      }
+    }
+    return [...counts.entries()]
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  }, [allRecipes]);
+
   const activeRecipe = useMemo(() => {
     const id = activeRecipeId ?? rankedRecipes[0]?.id;
     if (!id) return null;
@@ -172,12 +187,16 @@ export default function App() {
         recipeCount={recipeCount}
         busy={busy}
         onFullResync={fullResync}
+        categories={categories}
+        selectedTag={selectedTag}
+        onSelectTag={setSelectedTag}
       />
 
       <RecipeList
         selectedNav={selectedNav}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
+        selectedTag={selectedTag}
         produce={produce}
         rankedRecipes={rankedRecipes}
         allRecipes={allRecipes}

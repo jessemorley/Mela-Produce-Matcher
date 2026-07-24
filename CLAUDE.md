@@ -37,6 +37,13 @@ points at `../dist` (Vite's build output) in `tauri.conf.json`; dev mode
 proxies to Vite on `localhost:1420` via `devUrl`/`beforeDevCommand`. There is
 still no linter or JS test suite.
 
+The app window is a native macOS WKWebView (Tauri), not a browser tab, so
+there's no CDP/Playwright target to attach a driver to — Claude should not
+attempt to screenshot or drive the running app to verify UI changes. `npx
+vite build` (or `cargo check` for Rust) is the available correctness check;
+the user verifies UI/UX changes visually themselves in the running
+`npm run tauri dev` window.
+
 ## Architecture
 
 **Backend** (`src-tauri/src/lib.rs`) exposes Tauri commands:

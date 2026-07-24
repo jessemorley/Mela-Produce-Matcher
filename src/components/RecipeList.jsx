@@ -34,14 +34,15 @@ function MatchingView({
   activeRecipeId,
   onSelectRecipe,
   searchQuery,
+  selectedTag,
   unanalyzedCount,
   onSyncNow,
   unfixedCount,
   onFixNow,
 }) {
-  const filtered = rankedRecipes.filter((r) =>
-    r.title.toLowerCase().includes(searchQuery.toLowerCase()),
-  );
+  const filtered = rankedRecipes
+    .filter((r) => r.title.toLowerCase().includes(searchQuery.toLowerCase()))
+    .filter((r) => !selectedTag || r.tags?.includes(selectedTag));
 
   return (
     <div className="flex-1 overflow-y-auto flex flex-col">
@@ -226,10 +227,10 @@ function SavedRecipeRow({ rec, activeRecipeId, onSelectRecipe }) {
   );
 }
 
-function SavedRecipesView({ recipes, activeRecipeId, onSelectRecipe, searchQuery }) {
-  const filtered = recipes.filter((r) =>
-    r.title.toLowerCase().includes(searchQuery.toLowerCase()),
-  );
+function SavedRecipesView({ recipes, activeRecipeId, onSelectRecipe, searchQuery, selectedTag }) {
+  const filtered = recipes
+    .filter((r) => r.title.toLowerCase().includes(searchQuery.toLowerCase()))
+    .filter((r) => !selectedTag || r.tags?.includes(selectedTag));
   const synced = filtered.filter((r) => r.key_ingredients?.length > 0);
   const unsynced = filtered.filter((r) => !(r.key_ingredients?.length > 0));
 
@@ -280,6 +281,7 @@ export default function RecipeList({
   selectedNav,
   searchQuery,
   onSearchChange,
+  selectedTag,
   produce,
   rankedRecipes,
   allRecipes,
@@ -322,6 +324,7 @@ export default function RecipeList({
           activeRecipeId={activeRecipeId}
           onSelectRecipe={onSelectRecipe}
           searchQuery={searchQuery}
+          selectedTag={selectedTag}
           unanalyzedCount={unanalyzedCount}
           onSyncNow={onSyncNow}
           unfixedCount={unfixedCount}
@@ -335,6 +338,7 @@ export default function RecipeList({
           activeRecipeId={activeRecipeId}
           onSelectRecipe={onSelectRecipe}
           searchQuery={searchQuery}
+          selectedTag={selectedTag}
         />
       )}
     </div>

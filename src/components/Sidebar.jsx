@@ -1,4 +1,5 @@
-import { Leaf, Sparkles, BookOpen, RefreshCw } from "lucide-react";
+import { useState } from "react";
+import { Leaf, Sparkles, BookOpen, RefreshCw, ChevronDown } from "lucide-react";
 
 const NAV_ITEMS = [
   { key: "matching", label: "Harvest Matches", icon: Sparkles, count: (c) => c.matchCount },
@@ -6,13 +7,7 @@ const NAV_ITEMS = [
   { key: "recipes", label: "Saved Recipes", icon: BookOpen, count: (c) => c.recipeCount },
 ];
 
-// ponytail: display-only, same as the mockup — Mela's schema has no tag
-// field to filter on. Wire up onClick when it does.
-const PANTRY_TAGS = [
-  { label: "Baking Comfort", dot: "bg-amber-400" },
-  { label: "Quick Dinners", dot: "bg-rose-400" },
-  { label: "Vegan/Vegetarian", dot: "bg-emerald-400" },
-];
+const TAG_DOTS = ["bg-amber-400", "bg-rose-400", "bg-emerald-400", "bg-sky-400", "bg-violet-400"];
 
 export default function Sidebar({
   selectedNav,
@@ -22,11 +17,15 @@ export default function Sidebar({
   recipeCount,
   busy,
   onFullResync,
+  categories,
+  selectedTag,
+  onSelectTag,
 }) {
   const counts = { matchCount, produceCount, recipeCount };
+  const [categoriesOpen, setCategoriesOpen] = useState(true);
 
   return (
-    <div className="w-64 shrink-0 bg-slate-100/90 border-r border-slate-200/60 flex flex-col">
+    <div className="w-64 shrink-0 bg-slate-100/90 border-r border-slate-200/60 flex flex-col overflow-hidden">
       <div className="h-8 shrink-0" data-tauri-drag-region />
 
       <div className="px-4 py-3 flex items-center space-x-3 mb-4">
@@ -76,19 +75,44 @@ export default function Sidebar({
         ))}
       </div>
 
-      <div className="mt-6 px-2 space-y-1">
-        <span className="px-3 text-[10px] font-semibold text-slate-400 uppercase tracking-widest block mb-1">
-          My Pantry Tags
-        </span>
-        <div className="px-3 space-y-2 py-1.5">
-          {PANTRY_TAGS.map(({ label, dot }) => (
-            <div key={label} className="flex items-center space-x-2 text-xs text-slate-600">
-              <span className={`w-2.5 h-2.5 rounded-full ${dot}`} />
-              <span>{label}</span>
+      {categories.length > 0 && (
+        <div className="mt-6 px-2 flex flex-col min-h-0 flex-1">
+          <button
+            onClick={() => setCategoriesOpen((o) => !o)}
+            className="w-full flex items-center justify-between px-3 mb-1 shrink-0"
+          >
+            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">
+              Categories
+            </span>
+            <ChevronDown
+              className={`w-3 h-3 text-slate-400 transition-transform ${
+                categoriesOpen ? "" : "-rotate-90"
+              }`}
+            />
+          </button>
+          {categoriesOpen && (
+            <div className="space-y-0.5 overflow-y-auto min-h-0">
+              {categories.map(({ label, count }, i) => (
+                <button
+                  key={label}
+                  onClick={() => onSelectTag(selectedTag === label ? null : label)}
+                  className={`w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs transition-all ${
+                    selectedTag === label
+                      ? "bg-slate-200 text-slate-900 font-semibold"
+                      : "text-slate-600 hover:bg-slate-200/50"
+                  }`}
+                >
+                  <span className="flex items-center space-x-2">
+                    <span className={`w-2.5 h-2.5 rounded-full ${TAG_DOTS[i % TAG_DOTS.length]}`} />
+                    <span>{label}</span>
+                  </span>
+                  <span className="text-[10px] text-slate-400">{count}</span>
+                </button>
+              ))}
             </div>
-          ))}
+          )}
         </div>
-      </div>
+      )}
     </div>
   );
 }
