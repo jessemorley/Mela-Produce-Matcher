@@ -70,8 +70,18 @@ still no linter or JS test suite.
    empty (unfixed) rather than silently under-analysing the recipe. This is
    the only place recipe analysis happens, and it's also where per-line
    `name`/`pantry` get set — there is no separate pantry-classification call
-   any more.
-3. `match_recipes` — **no Claude call.** Scores cached recipes locally
+   any more. As each recipe's `id:` line streams back mid-call, a `status`
+   event fires with that recipe's title, so the status bar shows real-time
+   per-recipe progress ("Analysing 3/10: Asparagus Stir Fry") through the
+   single batched call rather than sitting on one message for the whole run.
+3. `set_ingredient_name` — the "Fix Now" queue's save action. A recipe whose
+   analysis came back incomplete leaves some lines with `name: ""`
+   (unfixed); this command sets a hand-typed `name`/`pantry` on **every**
+   ingredient across the whole collection whose `display` is byte-identical
+   to the one being fixed, since Mela repeats common lines ("1 tsp salt")
+   verbatim across many recipes — fixing it once shouldn't mean re-typing
+   the same correction for every recipe that has it.
+4. `match_recipes` — **no Claude call.** Scores cached recipes locally
    against the week's produce with `score_recipe`: a hit on the first key
    ingredient is worth 4, the second 3, and so on (floored at 1), so
    recipes *built around* in-season produce outrank ones that merely
@@ -86,7 +96,7 @@ still no linter or JS test suite.
    ("potato" != "sweet potato", "broccoli" != "broccolini"). Plain
    substring matching was the original rule and would rank a corned beef
    recipe as seasonal when corn is in season.
-4. `list_recipes` — returns the full local `recipes.json` as-is, for the
+5. `list_recipes` — returns the full local `recipes.json` as-is, for the
    frontend's "Saved Recipes" browse view (independent of any ranking).
 
 Only analysed recipes can ever match, since scoring reads `key_ingredients`
@@ -120,13 +130,30 @@ matched recipe back in Mela via its `mela://recipe/{id}` URL scheme.
 **Claude invocation** (`run_claude` / `run_claude_inner`) always shells out
 to the `claude` CLI with `--output-format stream-json
 --include-partial-messages`, streaming parsed text deltas back line-by-line
-through a callback — both remaining callers (produce extraction and
-key-ingredient analysis) pass a no-op callback and just use the full answer
-at the end, so nothing streams to the frontend any more. The child's PID is
-tracked in `RunningChild` (shared Tauri state) for the whole call so the
-`cancel` command can `kill -9` it; a SIGKILL exit is distinguished from a
-genuine CLI failure (`is_kill_signal`, unix-only) and surfaced to the
-frontend as the sentinel error string `"cancelled"` rather than a real error.
+through a callback. `analyze_new_recipes` is the one caller that uses this
+for something beyond the final answer — see above — produce extraction
+still passes a no-op callback. Two flags matter beyond the streaming
+plumbing:
+- `--effort low`. Default effort was observed (via `ttft_ms` on this app's
+  real batch prompts) spending up to ~20s composing a response before its
+  first token, on a task that's pure extraction/classification, not
+  reasoning — `low` cuts that to ~1-2s with no quality drop seen on this
+  prompt shape.
+- `--setting-sources ""`. The spawned process inherits this app's own
+  working directory, which sits inside a Claude Code project — without
+  this flag the CLI loads `~/.claude`'s user-level settings, including
+  whatever plugins happen to be globally enabled, and a `SessionStart` hook
+  from one was observed injecting an unrelated system prompt that broke
+  the model's adherence to the rigid `id:`/`key:`/`N => name => kind`
+  output format entirely. Loading no settings sources keeps every call a
+  clean, isolated completion regardless of what's configured for
+  interactive use on the machine running the app.
+
+The child's PID is tracked in `RunningChild` (shared Tauri state) for the
+whole call so the `cancel` command can `kill -9` it; a SIGKILL exit is
+distinguished from a genuine CLI failure (`is_kill_signal`, unix-only) and
+surfaced to the frontend as the sentinel error string `"cancelled"` rather
+than a real error.
 
 **Frontend** (`src/App.jsx` + `src/components/`) listens for two events —
 `status` (free-text progress) and `produce` (`{fruit, vegetable, pick,
@@ -148,11 +175,24 @@ falls back to the Saved Recipes list only for recipes that never matched.
 row, then the recipe text, then the ingredients below it split into Produce
 and Pantry columns by each ingredient's own `pantry` flag — no JS-side
 reimplementation of any Rust logic, since the backend now stores the
-classification directly. `ArticleView.jsx` is a sanitized
-in-app reader for the full newsletter post (`sanitizeArticle` strips
-scripts/styles/forms/dangerous attributes), toggled in place of the detail
-pane; external links inside it route through `open_url` to the system
-browser rather than navigating the webview.
+classification directly. Each row shows `ingredient.name` (capitalised via
+CSS, not string mutation) with the raw `display` line as a hover tooltip;
+Tauri's WKWebView doesn't reliably render the native `title` attribute, so
+the tooltip is a CSS-only `group`-hover element instead. `ArticleView.jsx`
+is a sanitized in-app reader for the full newsletter post (`sanitizeArticle`
+strips scripts/styles/forms/dangerous attributes), toggled in place of the
+detail pane; external links inside it route through `open_url` to the
+system browser rather than navigating the webview.
+
+`FixNowQueue.jsx` is a modal queue over every unfixed ingredient
+(`name: ""`) belonging to an *analysed* recipe (an unanalysed recipe's
+lines are covered by the Sync Now banner instead, not this one) —
+`unfixedDisplays` in that file dedupes by `display` before building the
+queue, matching `set_ingredient_name`'s byte-identical-clears-all backend
+behaviour, so the user never has to type the same correction twice for a
+line Mela repeats verbatim across recipes ("1 tsp salt"). `App.jsx` mirrors
+the backend's `unfixed_ingredients` count in JS (`countUnfixed`) so the
+banner updates immediately after a fix without waiting on a full resync.
 
 Dark mode only — no light theme, no `prefers-color-scheme` toggle.
 

@@ -36,6 +36,8 @@ function MatchingView({
   searchQuery,
   unanalyzedCount,
   onSyncNow,
+  unfixedCount,
+  onFixNow,
 }) {
   const filtered = rankedRecipes.filter((r) =>
     r.title.toLowerCase().includes(searchQuery.toLowerCase()),
@@ -54,6 +56,19 @@ function MatchingView({
           >
             <RefreshCw className="w-3 h-3" />
             Sync Now
+          </button>
+        </div>
+      )}
+      {unfixedCount > 0 && (
+        <div className="p-3 flex items-center justify-between gap-2 bg-rose-50 border-b border-rose-100">
+          <span className="text-[11px] text-rose-800">
+            {unfixedCount} {unfixedCount === 1 ? "ingredient" : "ingredients"} not found
+          </span>
+          <button
+            onClick={onFixNow}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium bg-rose-500 text-white rounded-lg hover:bg-rose-600 transition-all"
+          >
+            Fix Now
           </button>
         </div>
       )}
@@ -254,6 +269,8 @@ export default function RecipeList({
   onSelectRecipe,
   unanalyzedCount,
   onSyncNow,
+  unfixedCount,
+  onFixNow,
   feedLink,
   onOpenArticle,
 }) {
@@ -289,6 +306,8 @@ export default function RecipeList({
           searchQuery={searchQuery}
           unanalyzedCount={unanalyzedCount}
           onSyncNow={onSyncNow}
+          unfixedCount={unfixedCount}
+          onFixNow={onFixNow}
         />
       )}
       {selectedNav === "produce" && <ProduceView produce={produce} searchQuery={searchQuery} />}

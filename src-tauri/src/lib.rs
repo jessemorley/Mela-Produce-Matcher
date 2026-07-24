@@ -585,6 +585,24 @@ struct SyncResult {
     /// Recipes in the cache with no key_ingredients yet — what the "Sync
     /// Now" button offers to analyse.
     unanalyzed_count: usize,
+    /// Ingredient lines with an empty name in an otherwise-analysed recipe —
+    /// what "Fix Now" offers to correct by hand. Only counted within
+    /// analysed recipes: an unanalysed recipe's lines are all unfixed
+    /// trivially and are already surfaced by unanalyzed_count/Sync Now.
+    unfixed_count: usize,
+}
+
+/// Ingredient lines with an empty `name` belonging to a recipe that HAS been
+/// analysed (non-empty `key_ingredients`) — a recipe whose analysis came
+/// back incomplete (see the completeness check in `analyze_new_recipes`)
+/// leaves exactly these lines behind for "Fix Now" to surface.
+fn unfixed_ingredients(recipes: &[Recipe]) -> usize {
+    recipes
+        .iter()
+        .filter(|r| !r.key_ingredients.is_empty())
+        .flat_map(|r| r.ingredients.iter())
+        .filter(|i| i.name.is_empty())
+        .count()
 }
 
 /// Runs on app launch: refreshes the produce cache only if the newsletter
@@ -674,6 +692,7 @@ async fn sync_on_launch(
         produce_from_cache,
         recipe_count: recipes.len(),
         unanalyzed_count,
+        unfixed_count: unfixed_ingredients(&recipes),
     })
 }
 
@@ -806,6 +825,37 @@ fn match_recipes(
 #[tauri::command]
 fn list_recipes(app: tauri::AppHandle) -> Result<Vec<Recipe>, String> {
     Ok(load_recipes_cache(&app).unwrap_or_default())
+}
+
+/// Fixes an unanalysed ingredient line by hand — the "Fix Now" queue.
+/// Clears every ingredient across the whole collection whose `display` is
+/// byte-identical to `display` (not just the one row the user was looking
+/// at), since Mela repeats the same line verbatim across many recipes
+/// ("1 tsp salt") and fixing them one at a time would mean re-typing the
+/// same name dozens of times.
+#[tauri::command]
+fn set_ingredient_name(
+    app: tauri::AppHandle,
+    display: String,
+    name: String,
+    pantry: bool,
+) -> Result<Vec<Recipe>, String> {
+    let name = name.trim().to_lowercase();
+    if name.is_empty() {
+        return Err("Name can't be empty".to_string());
+    }
+    let mut recipes = load_recipes_cache(&app)
+        .ok_or_else(|| "No cached recipes — sync hasn't run yet".to_string())?;
+    for recipe in recipes.iter_mut() {
+        for ing in recipe.ingredients.iter_mut() {
+            if ing.display == display {
+                ing.name = name.clone();
+                ing.pantry = pantry;
+            }
+        }
+    }
+    save_recipes_cache(&app, &recipes)?;
+    Ok(recipes)
 }
 
 #[tauri::command]
@@ -1031,6 +1081,23 @@ mod tests {
         assert!(parsed.iter().all(|i| i.name.is_empty() && !i.pantry));
     }
 
+    // Fix Now only needs to surface lines in recipes that came back
+    // incomplete — an unanalysed recipe's lines are all unfixed trivially
+    // and are already covered by the Sync Now banner, so they must not
+    // double-count here.
+    #[test]
+    fn unfixed_ingredients_only_counts_within_analysed_recipes() {
+        let mut analysed = recipe("a", "Salad", &["fig"]);
+        analysed.ingredients = vec![ing("figs", "fig", false), unfixed("mystery leaf")];
+        let unanalysed = recipe("b", "New Recipe", &[]);
+        // unanalysed has empty ingredients here, but even with lines it
+        // shouldn't count — key_ingredients being empty excludes it.
+        let mut unanalysed = unanalysed;
+        unanalysed.ingredients = vec![unfixed("2 tbsp mystery sauce")];
+
+        assert_eq!(unfixed_ingredients(&[analysed, unanalysed]), 1);
+    }
+
     #[test]
     fn recipe_with_no_matching_key_ingredient_scores_zero() {
         let (score, matches) = score_recipe(
@@ -1118,6 +1185,7 @@ pub fn run() {
             analyze_new_recipes,
             match_recipes,
             list_recipes,
+            set_ingredient_name,
             cancel,
             open_recipe,
             open_url

@@ -4,6 +4,7 @@ import Sidebar from "./components/Sidebar.jsx";
 import RecipeList from "./components/RecipeList.jsx";
 import RecipeDetail from "./components/RecipeDetail.jsx";
 import ArticleView from "./components/ArticleView.jsx";
+import FixNowQueue from "./components/FixNowQueue.jsx";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -25,6 +26,8 @@ export default function App() {
   const [allRecipes, setAllRecipes] = useState([]); // full local recipes.json, for "Saved Recipes"
   const [activeRecipeId, setActiveRecipeId] = useState(null);
   const [unanalyzedCount, setUnanalyzedCount] = useState(0);
+  const [unfixedCount, setUnfixedCount] = useState(0);
+  const [showFixNow, setShowFixNow] = useState(false);
 
   // Launch-time sync: fetch cached-or-fresh produce, resync recipes.json from Mela.
   useEffect(() => {
@@ -42,9 +45,10 @@ export default function App() {
         setProduce(result.produce);
         setRecipeCount(result.recipe_count);
         setUnanalyzedCount(result.unanalyzed_count);
+        setUnfixedCount(result.unfixed_count);
         return invoke("list_recipes");
       })
-      .then((recipes) => setAllRecipes(recipes ?? []))
+      .then((recipes) => setAllRecipes(recipes ?? [])) // unfixedCount already came from sync_on_launch
       .catch((err) => setStatus(err === "cancelled" ? "Cancelled." : `Error: ${err}`))
       .finally(() => setBusy(false));
 
@@ -87,13 +91,32 @@ export default function App() {
     }
   }
 
+  // Mirrors unfixed_ingredients() in lib.rs: lines with no name, counted
+  // only within recipes that HAVE been analysed (an unanalysed recipe's
+  // lines are covered by the Sync Now banner instead).
+  function countUnfixed(recipes) {
+    return recipes
+      .filter((r) => r.key_ingredients?.length > 0)
+      .reduce(
+        (total, r) => total + (r.ingredients || []).filter((i) => !i.name).length,
+        0,
+      );
+  }
+
+  function applyRecipes(recipes) {
+    setAllRecipes(recipes);
+    setUnfixedCount(countUnfixed(recipes));
+  }
+
   // "Sync Now": run the Claude key-ingredient analysis over recipes the
-  // launch sync found unanalysed, then refresh the local list.
+  // launch sync found unanalysed, then refresh the local list. An analysis
+  // that comes back incomplete can leave newly-unfixed lines behind, so
+  // unfixedCount is recomputed here too, not just on launch.
   async function analyzeNew() {
     setBusy(true);
     try {
       await invoke("analyze_new_recipes");
-      setAllRecipes((await invoke("list_recipes")) ?? []);
+      applyRecipes((await invoke("list_recipes")) ?? []);
       setUnanalyzedCount(0);
     } catch (err) {
       setStatus(err === "cancelled" ? "Cancelled." : `Error: ${err}`);
@@ -127,9 +150,19 @@ export default function App() {
         onSelectRecipe={setActiveRecipeId}
         unanalyzedCount={unanalyzedCount}
         onSyncNow={analyzeNew}
+        unfixedCount={unfixedCount}
+        onFixNow={() => setShowFixNow(true)}
         feedLink={feedLink}
         onOpenArticle={() => setShowArticle(true)}
       />
+
+      {showFixNow && (
+        <FixNowQueue
+          recipes={allRecipes}
+          onClose={() => setShowFixNow(false)}
+          onRecipesChange={applyRecipes}
+        />
+      )}
 
       <div className="flex-1 flex flex-col bg-slate-50/50 overflow-hidden relative">
         <div className="absolute inset-x-0 top-0 h-8 z-10" data-tauri-drag-region />
