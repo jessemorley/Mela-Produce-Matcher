@@ -140,21 +140,6 @@ export default function App() {
     }
   }
 
-  // Per-recipe escape hatch for an edit made directly in Mela: re-reads just
-  // that one recipe and splices it into allRecipes via applyRecipes, same
-  // pattern analyzeNew uses to keep unfixedCount in sync.
-  async function resyncRecipe(id) {
-    setBusy(true);
-    try {
-      const recipe = await invoke("resync_recipe", { id });
-      applyRecipes(allRecipes.map((r) => (r.id === id ? recipe : r)));
-    } catch (err) {
-      setStatus(`Error: ${err}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   // Full-collection escape hatch: same slow path sync_on_launch used to run
   // unconditionally, now explicit. Replaces allRecipes wholesale.
   async function fullResync() {
@@ -228,7 +213,7 @@ export default function App() {
               onBack={() => setShowArticle(false)}
             />
           ) : activeRecipe ? (
-            <RecipeDetail recipe={activeRecipe} onResync={resyncRecipe} />
+            <RecipeDetail recipe={activeRecipe} />
           ) : (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm gap-2">
               <Leaf className="w-8 h-8" />

@@ -1,4 +1,4 @@
-import { ExternalLink, Clock, User, Heart, Check, RefreshCw } from "lucide-react";
+import { ExternalLink, Clock, User, Heart, Check } from "lucide-react";
 
 const { invoke } = window.__TAURI__.core;
 
@@ -10,7 +10,7 @@ function inList(list, name) {
   });
 }
 
-export default function RecipeDetail({ recipe, onResync }) {
+export default function RecipeDetail({ recipe }) {
   const ingredients = recipe.ingredients || [];
   const matches = recipe.matches || [];
 
@@ -79,14 +79,6 @@ export default function RecipeDetail({ recipe, onResync }) {
           </div>
         </div>
         <div className="shrink-0 flex items-center space-x-2">
-          <button
-            onClick={() => onResync(recipe.id)}
-            title="Re-read this recipe from Mela"
-            className="flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition-all"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Resync from Mela</span>
-          </button>
           <button
             onClick={() => invoke("open_recipe", { id: recipe.id })}
             className="flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium bg-emerald-500 text-white rounded-lg shadow-sm hover:bg-emerald-600 transition-all"

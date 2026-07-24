@@ -70,11 +70,13 @@ the user verifies UI/UX changes visually themselves in the running
    recipe analysis.
 2. `resync_recipe(id)` / `full_resync` — the escape hatches for an edit made
    directly in Mela, which `sync_on_launch`'s cache-trusting diff can't see.
-   `resync_recipe` re-reads one recipe by ID and splices it into the cache
-   (the "Resync from Mela" button in `RecipeDetail.jsx`, next to "Open in
-   Mela"); `full_resync` re-reads every recipe unconditionally, i.e. today's
-   pre-incremental-sync behavior on demand (the `RefreshCw` icon button in
-   `Sidebar.jsx`'s header). Both share `sync_produce` with `sync_on_launch`
+   `resync_recipe` re-reads one recipe by ID and splices it into the cache;
+   it's a working Tauri command but currently has no frontend caller (the
+   per-recipe "Resync from Mela" button in `RecipeDetail.jsx` was removed —
+   `full_resync` is the only resync path exposed in the UI now, via the
+   `RefreshCw` icon button in `Sidebar.jsx`'s header, re-reading every
+   recipe unconditionally, i.e. today's pre-incremental-sync behavior on
+   demand). Both share `sync_produce` with `sync_on_launch`
    for the produce-cache half so the three commands can't diverge on that
    part — only the recipe-loading strategy differs.
 3. `analyze_new_recipes` — the "Sync Now" button. Sends every cached recipe
