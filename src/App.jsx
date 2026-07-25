@@ -7,7 +7,6 @@ import ArticleView from "./components/ArticleView.jsx";
 import FixNowQueue from "./components/FixNowQueue.jsx";
 import { ContextMenu, useContextMenu } from "./components/ContextMenu.jsx";
 import { produceIcon } from "./components/icons.js";
-import { useScrollbars } from "./useScrollbars.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -32,7 +31,6 @@ export default function App() {
   const [unfixedCount, setUnfixedCount] = useState(0);
   const [showFixNow, setShowFixNow] = useState(false);
   const [menu, openMenu, closeMenu] = useContextMenu();
-  useScrollbars(); // scrollbars stay invisible until you scroll
 
   // ONE selection drives the detail pane, whatever view made it — switching
   // nav browses, it doesn't select, so the pane holds until you pick something
@@ -322,10 +320,13 @@ export default function App() {
             <div className="h-[50px] w-full" data-tauri-drag-region="deep" />
           </div>
 
-          {/* min-h-full, not h-full: EmptyPane and ProducePane both resolve
-              their own full height against this, but a long recipe still has
-              to be able to exceed it. */}
-          <div className="relative z-10 min-h-full">
+          {/* min-h-full, not h-full, so a long recipe can still exceed the
+              pane. That leaves the wrapper's height indefinite, though, and
+              a child's `h-full` resolves against nothing — which is why the
+              empty state used to collapse to the top instead of centring.
+              flex-col fixes it without a definite height: the child stretches
+              to the wrapper's full height via align-items: stretch. */}
+          <div className="relative z-10 flex min-h-full flex-col">
             {showArticle ? (
               <ArticleView title={feedTitle} html={feedHtml} onBack={() => setShowArticle(false)} />
             ) : selectedProduce ? (
@@ -371,9 +372,12 @@ export default function App() {
   );
 }
 
+// flex-1, not h-full: the parent's height is a minimum, not a definite value,
+// so a percentage height resolves to nothing and this collapses to the top.
+// Growing to fill the flex column is what centres it.
 function EmptyPane({ icon, body }) {
   return (
-    <div className="flex h-full min-h-full flex-col items-center justify-center px-10">
+    <div className="flex flex-1 flex-col items-center justify-center px-10">
       {icon}
       <p className="mt-3 max-w-[22rem] text-center text-[13px] leading-relaxed text-text/35">
         {body}
@@ -383,13 +387,14 @@ function EmptyPane({ icon, body }) {
 }
 
 // A produce selection renders its matching recipes as full recipe cards — the
-// same detail body as the pane, stacked. A lone card grows to fill the slot
-// (flex, not min-h-full: a percentage minimum needs a definite parent height).
+// same detail body as the pane, stacked. Both branches use flex-1 rather than
+// min-h-full: the wrapper in the detail pane has an indefinite height, so a
+// percentage would resolve to nothing. A lone card grows to fill the slot.
 function ProducePane({ item, recipes }) {
   if (recipes.length === 0) {
     const Icon = produceIcon(item.type);
     return (
-      <div className="flex min-h-full flex-col items-center justify-center rounded-2xl bg-pane px-10">
+      <div className="flex flex-1 flex-col items-center justify-center rounded-2xl bg-pane px-10">
         <Icon
           className={`h-6 w-6 ${
             item.tone === "pick" ? "text-pick-dim" : "text-match-dim"
@@ -406,7 +411,7 @@ function ProducePane({ item, recipes }) {
 
   const only = recipes.length === 1;
   return (
-    <div className="flex min-h-full flex-col gap-2.5">
+    <div className="flex flex-1 flex-col gap-2.5">
       {recipes.map((rec) => (
         <RecipeDetail
           key={rec.id}

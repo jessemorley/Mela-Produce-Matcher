@@ -35,22 +35,9 @@
   color-scheme: dark;
 }
 
-/* Overlay scrollbars: invisible at rest, appearing only while scrolling.
-   macOS does this natively when "Show scroll bars" is set to "When
-   scrolling", but that's a user system setting we can't rely on — under
-   "Always" WKWebView renders classic bars that permanently eat gutter width.
-   So the bar is drawn explicitly: zero-opacity thumb at rest, faded in on
-   scroll via the .scrolling class (see useScrollbars in App.jsx).
-
-   Not `display: none` — that removes the bar entirely, so it never appears
-   while scrolling either, and it kills the ability to drag it. Width stays
-   constant in every state so text never reflows as the bar fades. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
-  transition: scrollbar-color 0.3s ease;
-}
-
+/* Scrollbars: always visible, styled to match the palette. The bar reserves
+   ~9px of layout width, which is why the detail pane's banner image stops
+   just short of the pane edge. */
 *::-webkit-scrollbar {
   width: 9px;
   height: 9px;
@@ -60,31 +47,18 @@
   background: transparent;
 }
 
+/* The border insets the thumb from the track (background-clip: content-box
+   means only the content box paints), so it costs 2x its width. */
 *::-webkit-scrollbar-thumb {
-  background-color: transparent;
-  border: 2px solid transparent;
+  background-color: color-mix(in oklab, var(--color-text) 25%, transparent);
+  border: 1px solid transparent;
   border-radius: 999px;
   background-clip: content-box;
-  transition: background-color 0.3s ease;
 }
 
-/* Hovering the pane also reveals it, so a scrollable area that hasn't been
-   scrolled yet still advertises that it scrolls. */
-.scrolling::-webkit-scrollbar-thumb,
-*:hover::-webkit-scrollbar-thumb {
-  background-color: color-mix(in oklab, var(--color-text) 22%, transparent);
-}
-
-.scrolling {
-  scrollbar-color: color-mix(in oklab, var(--color-text) 22%, transparent) transparent;
-}
-
-/* Hovering or dragging the bar itself keeps it solid. Last so it wins over
-   the .scrolling rule above — otherwise grabbing the thumb (which stops the
-   scroll, dropping .scrolling) would fade it out under the cursor. */
 *::-webkit-scrollbar-thumb:hover,
 *::-webkit-scrollbar-thumb:active {
-  background-color: color-mix(in oklab, var(--color-text) 38%, transparent);
+  background-color: color-mix(in oklab, var(--color-text) 45%, transparent);
 }
 
 body {
