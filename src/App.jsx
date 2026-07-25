@@ -304,18 +304,21 @@ export default function App() {
             selectedProduce && !showArticle ? "" : "rounded-2xl bg-pane"
           }`}
         >
-          {/* This pane is opaque too, so it carries its own drag strip. It's
+          {/* This pane is opaque, so it carries its own drag strip. It's
               `sticky`, not `absolute`: the pane scrolls, and an absolute strip
-              would scroll out of the top 50px along with the content. Zero
-              height with a 50px overflow so it takes no layout space and
-              doesn't push the recipe banner down.
+              would scroll out of the top 50px with the content. Zero height
+              with a 50px overflow so it takes no layout space and doesn't
+              push the recipe banner down.
 
-              A negative z-index would be painted over by this pane's own
-              bg-pane, so it stays at the default level and the content is
-              lifted above it with `relative z-10` instead — otherwise this
-              strip would cover the image banner and the "Open in Mela"
-              button and eat their clicks. */}
-          <div className="sticky top-0 h-0 overflow-visible" aria-hidden="true">
+              It sits ABOVE the content (z-20 vs the content's z-10). Below
+              it, the content is the topmost element in the composed path and
+              Tauri never sees the strip, so the top of the pane doesn't drag
+              — the exact bug this arrangement fixes. Nothing is lost by
+              putting it on top: pointer-events-none is off (that would remove
+              it from the path entirely), and the strip is only 50px tall, so
+              the sole control it can overlap is "Open in Mela" — which stays
+              clickable because Tauri refuses to drag from a BUTTON. */}
+          <div className="sticky top-0 z-20 h-0 overflow-visible" aria-hidden="true">
             <div className="h-[50px] w-full" data-tauri-drag-region="deep" />
           </div>
 
