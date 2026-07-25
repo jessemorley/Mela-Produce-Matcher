@@ -3,9 +3,10 @@
 // (detail slot). No new idioms invented — each reuses the shell's existing
 // vocabulary: flat rounded fills, palette tints, accent reserved for state.
 import { useMemo, useState } from "react";
-import { Search, Clock, Heart, ChevronLeft, Check, AlertCircle } from "lucide-react";
+import { Search, Clock, Heart, ChevronLeft, Check, AlertCircle, BookOpen } from "lucide-react";
 import { rgba } from "./palettes.js";
 import { VEGETABLE } from "./icons.js";
+import { FilterChip, ListEmpty } from "./ListStates.jsx";
 
 // ─────────────────────────────────────────────────────────────────────────
 // All Recipes — the list slot. Mirrors the real SavedRecipesView: synced /
@@ -13,8 +14,10 @@ import { VEGETABLE } from "./icons.js";
 // Matches row (same padding, same title size) but carry time/tags instead of
 // a rating, since an unmatched recipe has no rating to show.
 // ─────────────────────────────────────────────────────────────────────────
-export function AllRecipesList({ recipes, activeId, onSelect, query, onQuery, onContextMenu, isExcluded, p }) {
-  const filtered = recipes.filter((r) => r.title.toLowerCase().includes(query.toLowerCase()));
+export function AllRecipesList({ recipes, activeId, onSelect, query, onQuery, onContextMenu, isExcluded, tag, onClearTag, p }) {
+  const filtered = recipes
+    .filter((r) => r.title.toLowerCase().includes(query.toLowerCase()))
+    .filter((r) => !tag || r.tags?.includes(tag));
   const off = (r) => (isExcluded ? isExcluded(r.id) : r.excluded);
   const active = filtered.filter((r) => !off(r));
   const synced = active.filter((r) => r.key_ingredients?.length > 0);
@@ -90,20 +93,33 @@ export function AllRecipesList({ recipes, activeId, onSelect, query, onQuery, on
           All Recipes
         </h2>
         <span className="text-[10.5px] tabular-nums" style={{ color: rgba(p.text, 0.3) }}>
-          {recipes.length}
+          {filtered.length === recipes.length ? recipes.length : `${filtered.length} of ${recipes.length}`}
         </span>
       </div>
 
       <SearchField value={query} onChange={onQuery} p={p} />
+      {tag && <FilterChip tag={tag} onClear={onClearTag} p={p} />}
 
       <div className="flex-1 overflow-y-auto px-3 pb-3">
         <Section title="Synced" rows={synced} />
         <Section title="Unsynced" rows={unsynced} />
         <Section title="Excluded" rows={excluded} dim />
         {filtered.length === 0 && (
-          <p className="px-3.5 py-3 text-[12.5px]" style={{ color: rgba(p.text, 0.35) }}>
-            No recipes match that search.
-          </p>
+          <ListEmpty
+            p={p}
+            icon={recipes.length === 0 ? BookOpen : Search}
+            title={recipes.length === 0 ? "No recipes yet" : "Nothing found"}
+            body={
+              recipes.length === 0
+                ? "Recipes sync from Mela when the app starts."
+                : tag && query
+                  ? `No ${tag.toLowerCase()} recipes match that search.`
+                  : tag
+                    ? `Nothing in ${tag.toLowerCase()} yet.`
+                    : "No recipes match that search."
+            }
+            action={tag ? { label: "Clear filter", onClick: onClearTag } : null}
+          />
         )}
       </div>
     </>

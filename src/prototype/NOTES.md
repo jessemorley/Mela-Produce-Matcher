@@ -69,14 +69,40 @@ as much of the generic feel as the accents were.
   seeded from the raw line before anything is typed, and a genuinely new name
   is flagged. Picking an existing name carries its produce/pantry flag across.
 
+- **The status bar shows determinate progress where the backend knows it.**
+  `analyze_new_recipes` already emits `Analysing 3/10: <title>` per recipe, so
+  that's parsed (`parseProgress`) into a real progress line plus the current
+  recipe title. The spinner is reserved for phases whose length genuinely
+  isn't known — feed fetch, Mela sync. Errors get their own state rather than
+  being dumped into the status line as raw text.
+- **Empty lists distinguish three causes**, because one generic "nothing here"
+  leaves the user stuck: filtered-to-nothing (offers *Clear filter*),
+  nothing-analysed-yet (offers the sync explanation — this is also the
+  first-run screen), and genuinely-no-matches (explains, offers nothing,
+  because there is nothing to do).
+- **Category filtering is one tag at a time, click to toggle off**, matching
+  the real `selectedTag`. The sidebar row highlights, the header count becomes
+  "3 of 7", and a chip above the list gives a one-click exit from the pane
+  being filtered.
+
 ## Known gaps (deliberate)
 
-- All Recipes, Fix, and ArticleView are built; the sidebar's Categories list
-  and the "Sync" banner action are still inert.
-- No backend wiring at all — `set_excluded` is local state, `save` in the Fix
-  queue just advances the queue.
+- **No backend wiring at all.** Every view is built, but nothing calls Tauri:
+  `set_excluded` is local state, the Fix queue's save just advances, and the
+  Sync banner replays a scripted status sequence rather than calling Claude.
+  The eleven `invoke` bindings are the remaining work.
+- **Full resync** (the `RefreshCw` button in the real sidebar header) has no
+  prototype equivalent; its busy state would use the status bar built here.
 - Fixture coverage: only "leek" has 2 matching recipes; everything else has 1,
-  so the stacked-card case has one entry point.
+  so the stacked-card case has one entry point. "Basics" is the only category
+  that filters Best Matches to empty.
+
+## Open question
+
+Excluding a recipe from **Best Matches** should probably drop it out of the
+ranked list immediately, since excluded recipes can never match. The prototype
+only re-sections All Recipes — the ranked list is fixture data and doesn't
+recompute. Needs deciding during the port.
 
 ## Notes from reading the real Mela database
 

@@ -5,7 +5,7 @@
 // tight; the airiness comes from those gutters, not from line-height.
 // Colour comes entirely from palettes.js — two accents (match / pick) plus a
 // separate alert, so nothing borrows a meaning it doesn't own.
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Leaf, Sparkles, BookOpen, Tag, Ban, Undo2 } from "lucide-react";
 import { PRODUCE_LAYOUTS, ProduceDetail } from "./produceLayouts.jsx";
 import { Detail } from "./RecipeDetailBody.jsx";
@@ -13,6 +13,8 @@ import { PALETTE, rgba } from "./palettes.js";
 import { VEGETABLE } from "./icons.js";
 import { AllRecipesList, FixView, ArticleView } from "./remainingViews.jsx";
 import { ContextMenu, useContextMenu } from "./ContextMenu.jsx";
+import StatusBar from "./StatusBar.jsx";
+import { FilterChip, ListEmpty } from "./ListStates.jsx";
 
 export const name = "Ledger, inset — floating panes, warm ground";
 
@@ -34,9 +36,42 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
   // silently overwrote what the other was showing.
   const [selection, setSelection] = useState({ kind: "recipe", id: rankedRecipes[0]?.id });
   const [query, setQuery] = useState("");
+  const [tag, setTag] = useState(null); // one at a time, click to toggle off
   const [showFix, setShowFix] = useState(false);
   const [showArticle, setShowArticle] = useState(false);
   const [menu, openMenu, closeMenu] = useContextMenu();
+
+  // Prototype: no backend, so a fake run replays the status messages the Rust
+  // side actually emits — indeterminate phases first, then the per-recipe
+  // "Analysing n/total: title" stream that drives the progress line.
+  const [run, setRun] = useState({ busy: false, status });
+  const cancelRef = useRef(null);
+  function fakeSync() {
+    const unanalysed = allRecipes.filter((r) => !r.key_ingredients?.length && !r.excluded);
+    const total = Math.max(unanalysed.length, 6);
+    const titles = [...unanalysed, ...allRecipes].slice(0, total).map((r) => r.title);
+    const steps = [
+      [400, "Checking harrisfarm.com.au..."],
+      [700, "Identifying in-season produce..."],
+      [600, "Syncing recipes from Mela..."],
+      ...titles.map((t, i) => [520, `Analysing ${i + 1}/${total}: ${t}`]),
+      [400, `Analysed ${total} recipes.`],
+    ];
+    setRun({ busy: true, status: steps[0][1] });
+    let i = 0;
+    const timers = [];
+    const tick = () => {
+      i += 1;
+      if (i >= steps.length) return setRun({ busy: false, status: `${rankedRecipes.length} recipes match.` });
+      setRun({ busy: i < steps.length - 1, status: steps[i][1] });
+      timers.push(setTimeout(tick, steps[i][0]));
+    };
+    timers.push(setTimeout(tick, steps[0][0]));
+    cancelRef.current = () => {
+      timers.forEach(clearTimeout);
+      setRun({ busy: false, status: "Cancelled." });
+    };
+  }
 
   // Prototype: no backend, so exclusion is local state keyed by recipe id.
   const [excluded, setExcluded] = useState(() => new Set(allRecipes.filter((r) => r.excluded).map((r) => r.id)));
@@ -49,6 +84,8 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
     });
     closeMenu();
   }
+
+  const matchesShown = rankedRecipes.filter((r) => !tag || r.tags?.includes(tag));
 
   const activeId = selection.kind === "recipe" ? selection.id : null;
   const activeRecipe =
@@ -73,7 +110,7 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
           {/* src-tauri/icons/ still holds the default Tauri placeholder (cyan
               and yellow), which fights the palette — so the mark is drawn here
               in the app's own accents until a real icon exists. */}
-          <div className="flex items-center gap-2.5 px-5 pb-6 pt-5">
+          <div className="flex items-center gap-2.5 px-2.5 pb-6 pt-5">
             <span
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
               style={{ background: rgba(p.match, 0.14) }}
@@ -106,18 +143,39 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
           </nav>
           <div className="mt-8 px-2.5">
             <p className="px-3 pb-2 text-[9.5px] uppercase tracking-[0.18em]" style={{ color: rgba(p.text, 0.32) }}>Categories</p>
-            {categories.map(({ label, count }) => (
-              <button key={label} className="flex w-full items-center justify-between rounded-xl px-3 py-1.5 text-left text-[12.5px] hover:bg-white/[0.035]" style={{ color: rgba(p.text, 0.45) }}>
-                <span className="flex min-w-0 items-center gap-2.5">
-                  <Tag className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
-                  <span className="truncate">{label}</span>
-                </span>
-                <span className="text-[10.5px] tabular-nums" style={{ color: rgba(p.text, 0.3) }}>{count}</span>
-              </button>
-            ))}
+            {categories.map(({ label, count }) => {
+              const active = tag === label;
+              return (
+                <button
+                  key={label}
+                  onClick={() => setTag(active ? null : label)}
+                  className="flex w-full items-center justify-between rounded-xl px-3 py-1.5 text-left text-[12.5px] transition-colors hover:bg-white/[0.035]"
+                  style={{
+                    background: active ? rgba(p.text, 0.07) : undefined,
+                    color: active ? p.match : rgba(p.text, 0.45),
+                  }}
+                >
+                  <span className="flex min-w-0 items-center gap-2.5">
+                    <Tag className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />
+                    <span className="truncate">{label}</span>
+                  </span>
+                  <span
+                    className="text-[10.5px] tabular-nums"
+                    style={{ color: active ? p.match : rgba(p.text, 0.3) }}
+                  >
+                    {count}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-          <div className="mt-auto px-5 py-4">
-            <p className="truncate text-[10.5px]" style={{ color: rgba(p.text, 0.3) }}>{status}</p>
+          <div className="mt-auto">
+            <StatusBar
+              status={run.status}
+              busy={run.busy}
+              onCancel={() => cancelRef.current?.()}
+              p={p}
+            />
           </div>
         </aside>
 
@@ -138,6 +196,8 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
           ) : nav === "recipes" ? (
             <AllRecipesList
               recipes={allRecipes}
+              tag={tag}
+              onClearTag={() => setTag(null)}
               onContextMenu={openMenu}
               isExcluded={isExcluded}
               activeId={activeId}
@@ -150,12 +210,18 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
           <>
           <div className="flex items-baseline justify-between px-5 pb-4 pt-5">
             <h2 className="text-[12.5px] font-medium" style={{ color: rgba(p.text, 0.7) }}>Best Matches</h2>
-            <span className="text-[10.5px] tabular-nums" style={{ color: rgba(p.text, 0.3) }}>{rankedRecipes.length}</span>
+            <span className="text-[10.5px] tabular-nums" style={{ color: rgba(p.text, 0.3) }}>
+              {tag ? `${matchesShown.length} of ${rankedRecipes.length}` : rankedRecipes.length}
+            </span>
           </div>
+          {/* Banners first: they're notifications about the collection and
+              don't change with the view. The filter chip sits directly above
+              the list it's filtering. */}
           {(unanalyzedCount > 0 || unfixedCount > 0) && (
             <div className="mx-3 mb-3 space-y-1.5">
               {unanalyzedCount > 0 && (
                 <button
+                  onClick={fakeSync}
                   className="flex w-full items-center justify-between rounded-xl px-3.5 py-2 text-left transition-colors"
                   style={{ background: rgba(p.pick, 0.1) }}
                 >
@@ -175,10 +241,9 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
               )}
             </div>
           )}
+          {tag && <FilterChip tag={tag} onClear={() => setTag(null)} p={p} />}
           <div className="flex-1 overflow-y-auto px-3 pb-3">
-            {rankedRecipes
-              .filter((r) => r.title.toLowerCase().includes(query.toLowerCase()))
-              .map((rec) => {
+            {matchesShown.map((rec) => {
               const on = activeId === rec.id;
               return (
                 <button
