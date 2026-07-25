@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "recipe-suggester",
+  "productName": "Sprout",
   "version": "0.1.0",
   "identifier": "com.jessmorley.recipesuggester",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Seasonal Recipes",
+        "title": "Sprout",
         "width": 1280,
         "height": 800,
         "minWidth": 630,

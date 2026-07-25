@@ -38,9 +38,9 @@ export default function Sidebar({
           52+12=64). If trafficLightPosition changes, change this with it. */}
       <div className="h-[52px] shrink-0" data-tauri-drag-region="deep" />
 
-      {/* src-tauri/icons/ still holds the default Tauri placeholder (cyan and
-          yellow), which fights the palette — so the mark is drawn here in the
-          app's own accents until a real icon exists. */}
+      {/* This mark is also the app icon: src-tauri/icons/icon.svg is the same
+          Sprout glyph on a `pane` tile, with the palette's hex values inlined
+          (an SVG can't read the @theme block). Change one, change the other. */}
       {/* "deep" so the wordmark and tagline drag too — they sit inside the
           window's top drag band. The resync button inside is still blocked
           from dragging by Tauri's own clickable-element check. */}
