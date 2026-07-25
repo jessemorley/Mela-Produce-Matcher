@@ -4,7 +4,7 @@ import { produceIcon, VEGETABLE } from "./icons.js";
 import { FilterChip, ListEmpty } from "./ListStates.jsx";
 import StatusBar from "./StatusBar.jsx";
 import { imageSrc } from "../imageSrc.js";
-import { recipesUsing } from "../produceMatches.js";
+import { recipesUsing } from "../recipesUsing.js";
 
 // Header of every list view — same slot, same chrome, so switching nav never
 // moves the pane's furniture.
@@ -122,7 +122,9 @@ function MatchingView({
                   {rec.title}
                 </span>
                 <span className="mt-1.5 block truncate text-[10.5px] capitalize text-text/32">
-                  {[...rec.pick_matches, ...rec.seasonal_matches].join(" · ")}
+                  {[...rec.pick_matches, ...rec.seasonal_matches]
+                    .map((m) => m.ingredient)
+                    .join(" · ")}
                 </span>
               </span>
             </button>

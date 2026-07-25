@@ -33,8 +33,11 @@ export default function RecipeDetail({
   const ingredients = recipe.ingredients || [];
   // Dave's Picks (live market update) take precedence over the seasonal
   // table when a key ingredient is in both, matching the backend's scoring.
-  const pickMatches = recipe.pick_matches || [];
-  const seasonalMatches = recipe.seasonal_matches || [];
+  // Matched *ingredient* names: these are compared against ingredient rows and
+  // key_ingredients below, so they take the ingredient side of each match, not
+  // the produce name it hit.
+  const pickMatches = (recipe.pick_matches || []).map((m) => m.ingredient);
+  const seasonalMatches = (recipe.seasonal_matches || []).map((m) => m.ingredient);
 
   const hit = (name) =>
     !!name && (inList(pickMatches, name) || inList(seasonalMatches, name));

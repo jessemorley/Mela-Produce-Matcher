@@ -9,7 +9,7 @@ import { ContextMenu, useContextMenu } from "./components/ContextMenu.jsx";
 import { produceIcon } from "./components/icons.js";
 import { resolveOpen } from "./openCard.js";
 import { imageSrc } from "./imageSrc.js";
-import { recipesUsing } from "./produceMatches.js";
+import { recipesUsing } from "./recipesUsing.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;

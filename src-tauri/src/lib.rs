@@ -734,6 +734,34 @@ const SUPPORTING_WEIGHT: u32 = 1;
 // should pull its weight when out of season — just less than it earns.
 const SUPPORTING_COST: u32 = 2;
 
+/// One in-season hit: the recipe's own ingredient name and the produce name
+/// it matched. Both are kept because they come from different vocabularies
+/// and each has a reader. `ingredient` is what the recipe calls it
+/// ("brussels sprouts") — the chip row displays it and the detail pane looks
+/// ingredient rows up by it. `produce` is the feed or seasonal-table name
+/// ("brussels sprout") — the In Season tiles carry that, and it's what they
+/// filter on.
+///
+/// Returning only `ingredient` is what made the tiles wrong: the frontend had
+/// to re-derive the produce-side comparison `produce_matches` had already
+/// done here, and an exact-string stand-in dropped every plural, casing or
+/// abbreviation difference (`brussels sprout` vs `brussels sprouts`). Keeping
+/// the pair means no caller has to re-match anything.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+struct Match {
+    ingredient: String,
+    produce: String,
+}
+
+impl Match {
+    fn new(ingredient: &str, produce: &str) -> Self {
+        Self {
+            ingredient: ingredient.to_string(),
+            produce: produce.to_string(),
+        }
+    }
+}
+
 /// Rates a recipe 0.0–1.0 on how *defining* its in-season ingredients are,
 /// across both layers: the live market update (`market`, weighted full) and
 /// the stable seasonal table (`seasonal`, weighted lower). Each key
@@ -767,7 +795,7 @@ fn rate_recipe(
     recipe: &Recipe,
     market: &[String],
     seasonal: &[String],
-) -> (f32, Vec<String>, Vec<String>) {
+) -> (f32, Vec<Match>, Vec<Match>) {
     let is_pantry = |name: &str| {
         recipe
             .ingredients
@@ -805,12 +833,12 @@ fn rate_recipe(
     let mut seasonal_matches = Vec::new();
     for (weight, cost, name) in weighted {
         max += cost;
-        if market.iter().any(|p| produce_matches(p, name)) {
+        if let Some(p) = market.iter().find(|p| produce_matches(p, name)) {
             score += weight * PICK_WEIGHT;
-            market_matches.push(name.clone());
-        } else if seasonal.iter().any(|p| produce_matches(p, name)) {
+            market_matches.push(Match::new(name, p));
+        } else if let Some(p) = seasonal.iter().find(|p| produce_matches(p, name)) {
             score += weight * SEASONAL_WEIGHT;
-            seasonal_matches.push(name.clone());
+            seasonal_matches.push(Match::new(name, p));
         }
     }
     // Supporting produce earns more than its slot costs, so an all-supporting,
@@ -1384,11 +1412,12 @@ struct RankedRecipe {
     /// 0.0–1.0 seasonal match rating (see `rate_recipe`), surfaced to the UI
     /// as a percentage rather than an ordinal rank.
     rating: f32,
-    /// Key ingredients that are this week's actual market-update picks.
-    pick_matches: Vec<String>,
-    /// Key ingredients in season per the stable seasonal table but not in
-    /// this week's market update.
-    seasonal_matches: Vec<String>,
+    /// Ingredients that are this week's actual market-update picks, each
+    /// paired with the produce name it matched (see `Match`).
+    pick_matches: Vec<Match>,
+    /// Ingredients in season per the stable seasonal table but not in this
+    /// week's market update, each paired with the produce name it matched.
+    seasonal_matches: Vec<Match>,
 }
 
 /// Rates cached recipes against this week's produce and the seasonal table
@@ -1720,6 +1749,13 @@ mod tests {
         ing(display, "", false)
     }
 
+    /// The ingredient names out of a match list. Most rating tests only care
+    /// which ingredients matched; the ones that care *which produce name* they
+    /// matched assert on the `Match` directly.
+    fn names(matches: &[Match]) -> Vec<&str> {
+        matches.iter().map(|m| m.ingredient.as_str()).collect()
+    }
+
     fn recipe(id: &str, title: &str, keys: &[&str]) -> Recipe {
         Recipe {
             id: id.into(),
@@ -1777,7 +1813,7 @@ mod tests {
         let (star_rating, picks, _) = rate_recipe(&star, &produce, &[]);
         let (garnish_rating, ..) = rate_recipe(&garnish, &produce, &[]);
         assert!(star_rating > garnish_rating);
-        assert_eq!(picks, vec!["asparagus"]);
+        assert_eq!(names(&picks), vec!["asparagus"]);
     }
 
     // A market-update pick must outrate a seasonal-table-only hit: same key
@@ -1790,10 +1826,26 @@ mod tests {
         let (seasonal_rating, picks2, seasonal2) =
             rate_recipe(&star, &[], &["asparagus".to_string()]);
         assert!(pick_rating > seasonal_rating);
-        assert_eq!(picks, vec!["asparagus"]);
+        assert_eq!(names(&picks), vec!["asparagus"]);
         assert!(seasonal.is_empty()); // market hit wins, not double-counted
         assert!(picks2.is_empty());
-        assert_eq!(seasonal2, vec!["asparagus"]);
+        assert_eq!(names(&seasonal2), vec!["asparagus"]);
+    }
+
+    // Each match carries the produce name it hit, not just the recipe's own
+    // ingredient name. The two differ whenever produce_matches accepts a pair
+    // that isn't byte-identical — a plural here — and the In Season tiles
+    // filter on the produce side. Returning only the ingredient name forced
+    // the frontend to re-derive this comparison, and its exact-string
+    // stand-in showed "no recipes" for produce that plainly matched.
+    #[test]
+    fn a_match_carries_both_the_ingredient_and_the_produce_name() {
+        let r = recipe("a", "Roast Sprouts", &["brussels sprouts"]);
+        let (_, picks, _) = rate_recipe(&r, &["brussels sprout".to_string()], &[]);
+        assert_eq!(
+            picks,
+            vec![Match::new("brussels sprouts", "brussels sprout")]
+        );
     }
 
     // A perfect market match rates 1.0; no hit at all rates 0.0.
@@ -1919,8 +1971,8 @@ mod tests {
             &["potato".to_string()],
             &["cauliflower".to_string()],
         );
-        assert_eq!(picks, vec!["potato"]);
-        assert_eq!(seasonal, vec!["cauliflower"]);
+        assert_eq!(names(&picks), vec!["potato"]);
+        assert_eq!(names(&seasonal), vec!["cauliflower"]);
         // cauliflower 4*1 + potato 3*3 = 13, over (4+3)*3 = 21 with cream out.
         assert!((rating - 13.0 / 21.0).abs() < 1e-6, "rating was {rating}");
     }
@@ -1943,7 +1995,7 @@ mod tests {
         ];
         let (rating, picks, _) = rate_recipe(&norma, &market, &[]);
         assert_eq!(rating, 1.0, "every produce key ingredient is a pick");
-        assert_eq!(picks, vec!["eggplant", "tomato"]); // basil is not a match
+        assert_eq!(names(&picks), vec!["eggplant", "tomato"]); // basil is not a match
     }
 
     // Produce outside the key list still counts. The noodle salad's only
@@ -1985,7 +2037,7 @@ mod tests {
             supporting_only < cucumber_only,
             "supporting {supporting_only} should trail defining {cucumber_only}"
         );
-        assert_eq!(seasonal, vec!["green onion", "cilantro"]);
+        assert_eq!(names(&seasonal), vec!["green onion", "cilantro"]);
     }
 
     // Supporting produce earns 3 on a pick but only costs 2, so a recipe made
