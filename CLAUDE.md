@@ -59,7 +59,7 @@ the user verifies UI/UX changes visually themselves in the running
    SQLite — but incrementally, not a full rescan: `recipe_ids` runs one cheap
    query for every `(Z_PK, ZID)` in Mela, `diff_recipe_ids` compares that
    against the cached recipe IDs, and only genuinely new IDs get a real
-   per-row read (`load_recipe`, image thumbnail included) while IDs already
+   per-row read (`load_recipe`, cover-image extraction included) while IDs already
    in the cache are reused untouched — an in-Mela edit to an existing recipe
    is *not* picked up this way (see `resync_recipe`/`full_resync` below).
    `merge_recipes` (which used to reconcile a full fresh SQLite re-read
@@ -113,9 +113,8 @@ the user verifies UI/UX changes visually themselves in the running
    skipped by `match_recipes`, by `analyze_new_recipes` (so excluding before
    the first analysis also saves the Claude call), and by both
    `unanalyzed_count` and `unfixed_ingredients`, so excluding clears it off
-   the Sync Now / Fix Now banners. Mela has no such field, so `full_resync`
-   and `resync_recipe` explicitly carry the flag over from the cache
-   (`excluded_ids`) rather than letting a fresh read reset it.
+   the Sync Now / Fix Now banners. Mela has no such field — see
+   `carry_over_local_fields` below for how a resync preserves it.
 6. `match_recipes` — **no Claude call.** Rates cached recipes locally with
    `rate_recipe` across **two layers**: the live market update (`fruit`+
    `vegetable`, "Dave's Picks") weighted `PICK_WEIGHT` (3), and a stable
@@ -174,6 +173,46 @@ opened `mode=ro` so it's safe to query while Mela itself has the file open
 (including its WAL), but only during the `sync_on_launch` resync — analysis
 and ranking both read `recipes.json` instead. `open_recipe` opens a
 matched recipe back in Mela via its `mela://recipe/{id}` URL scheme.
+
+**Any path that re-reads from Mela must call `carry_over_local_fields`.**
+Mela stores none of `excluded`, `key_ingredients`, or the per-ingredient
+`name`/`pantry` — a fresh `load_recipe` sets them all empty/false. Both
+resync commands run every recipe through `carry_over_local_fields` before
+saving, which copies those three back off the cached record. Skipping it
+throws away every Claude call the user has paid for, silently, on one button
+press: `full_resync` carried `excluded` only for a while, so pressing the
+sidebar's `RefreshCw` un-analysed the entire collection with no error and no
+way back short of re-running Sync Now. Ingredient data is matched by
+`display` (the verbatim Mela line), not by index, so an in-Mela edit that
+adds or reorders lines only re-analyses the lines that actually changed.
+`a_resync_keeps_analysis_that_mela_does_not_store` pins this.
+
+**Cover images are files on disk, not data URIs.** Mela stores each photo
+either inline in `ZDATA` (0x01-prefixed) or, past Core Data's external-storage
+threshold, as a 0x02-prefixed UUID pointing into `.Curcuma_SUPPORT/
+_EXTERNAL_DATA/` — `cover_image_path` handles both, then copies the original
+bytes **verbatim** into `<app data>/images/<recipe id>.<ext>` and stores that
+path in `Recipe.image`. Nothing is decoded or re-encoded: `image_extension`
+only sniffs the format to pick a file extension, which is also why HEIC needs
+no special case (WKWebView renders it via the system codec; the `image` crate
+can't decode it at all). The `image` crate is now a dev-dependency, used only
+to synthesise test fixtures, and `base64` is gone entirely.
+
+This replaced 128px re-encoded JPEG thumbnails inlined as base64 data URIs,
+which made `recipes.json` ~7MB to parse on every launch and capped the detail
+pane's full-bleed banner at thumbnail resolution. The frontend loads these
+paths through Tauri's asset protocol (`convertFileSrc`, wrapped in
+`src/imageSrc.js` — a bare path in a `src=""` is read as a relative URL and
+404s, rendering an empty box indistinguishable from "no photo"). That protocol
+is enabled by `assetProtocol.enable` + `scope: ["$APPDATA/images/**"]` in
+`tauri.conf.json` and the `protocol-asset` cargo feature; unlike
+`start-dragging` it takes **no** capabilities entry — there is no
+`core:asset-protocol` permission and adding one fails the build.
+
+A cache written in the old format would have `data:` URIs where paths belong
+and render as blank image slots. Nothing migrates them — this is a
+single-user app and that cache is already converted. Deleting `recipes.json`
+(and `images/`) forces a clean rebuild if one ever turns up.
 
 **Claude invocation** (`run_claude` / `run_claude_inner`) always shells out
 to the `claude` CLI with `--output-format stream-json
