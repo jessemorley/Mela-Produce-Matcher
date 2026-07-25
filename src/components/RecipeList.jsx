@@ -455,8 +455,10 @@ export default function RecipeList({
           still be cleared via its chip. */}
       <div className="relative z-10 min-[820px]:hidden">
         {/* Clearance for the traffic lights, which this pane sits under once
-            the sidebar is hidden. */}
-        <div className="h-7 shrink-0" />
+            the sidebar is hidden. Same 52px as the sidebar's spacer — they
+            sit at y 37..51 (trafficLightPosition in tauri.conf.json), so
+            anything shorter puts the nav strip underneath them. */}
+        <div className="h-[52px] shrink-0" />
         <div className="flex gap-1 px-2.5 pt-1">
           {NAV.map(({ key, label, icon: Icon }) => (
             <button

@@ -24,11 +24,19 @@ export default function Sidebar({
       style={{ width: "var(--sidebar)" }}
     >
       {/* The traffic lights are drawn by macOS over the top-left of the
-          window (titleBarStyle: Overlay), so the sidebar header starts below
-          them. The spacer is a drag region in its own right: App.jsx's
-          window-wide band sits *behind* the panes, so it only covers bare
-          ground — an opaque pane has to carry its own. */}
-      <div className="h-7 shrink-0" data-tauri-drag-region="deep" />
+          window (titleBarStyle: Overlay), positioned by
+          trafficLightPosition in tauri.conf.json: {x:20, y:37}. Both are
+          absolute px from the window's top-left — x:20 is the close
+          button's left edge, matching this pane's content edge (10px shell
+          padding + 10px sidebar padding), and y:37 is the button's top
+          edge. 20px also matches the list pane's own content edge, so the
+          lights stay aligned below 820px when the sidebar is hidden and
+          that pane becomes leftmost.
+
+          The buttons are ~14px tall, so they occupy y 37..51; this 52px
+          spacer is what keeps the header below them (content starts at
+          52+12=64). If trafficLightPosition changes, change this with it. */}
+      <div className="h-[52px] shrink-0" data-tauri-drag-region="deep" />
 
       {/* src-tauri/icons/ still holds the default Tauri placeholder (cyan and
           yellow), which fights the palette — so the mark is drawn here in the
