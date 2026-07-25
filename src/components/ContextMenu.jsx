@@ -1,10 +1,9 @@
-// PROTOTYPE — right-click menu for recipe rows, shared by both list panes.
-// Exclude used to be a button in the detail header; it's rare housekeeping,
-// so it moved here rather than sitting beside "Open in Mela".
+// Right-click menu for recipe rows, shared by both list panes. Exclude used
+// to be a button in the detail header; it's rare housekeeping, so it lives
+// here rather than sitting beside "Open in Mela".
 import { useEffect, useState } from "react";
-import { rgba } from "./palettes.js";
 
-// Returns [menu, openAt] — spread openAt onto a row's onContextMenu.
+// Returns [menu, openAt, close] — spread openAt onto a row's onContextMenu.
 export function useContextMenu() {
   const [menu, setMenu] = useState(null); // { x, y, item }
 
@@ -34,7 +33,7 @@ export function useContextMenu() {
   return [menu, openAt, () => setMenu(null)];
 }
 
-export function ContextMenu({ menu, items, p }) {
+export function ContextMenu({ menu, items }) {
   if (!menu) return null;
 
   // Keep the menu on screen when the row is near the right/bottom edge.
@@ -45,16 +44,17 @@ export function ContextMenu({ menu, items, p }) {
 
   return (
     <div
-      className="fixed z-50 rounded-xl py-1 shadow-lg"
-      style={{ left: x, top: y, width: W, background: p.pane, boxShadow: `0 8px 24px ${rgba(p.ground, 0.6)}` }}
+      className="fixed z-50 rounded-xl bg-pane py-1 shadow-[0_8px_24px_rgba(19,18,17,0.6)]"
+      style={{ left: x, top: y, width: W }}
       onClick={(e) => e.stopPropagation()}
     >
       {items.map(({ label, icon: Icon, onClick, danger }) => (
         <button
           key={label}
           onClick={onClick}
-          className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[12.5px] hover:brightness-125"
-          style={{ color: danger ? p.alertSoft : rgba(p.text, 0.75) }}
+          className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[12.5px] hover:brightness-125 ${
+            danger ? "text-alert-soft" : "text-text/75"
+          }`}
         >
           {Icon && <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={1.75} />}
           {label}

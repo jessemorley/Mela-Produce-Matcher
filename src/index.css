@@ -1,7 +1,38 @@
 @import "tailwindcss";
 
+/* The chosen "newsprint" palette. Hand-picked hex on a warmed ground —
+   Tailwind's emerald/amber defaults and the blue-leaning neutral-* greys were
+   most of why the old scheme read as generic.
+
+   `match` — seasonal match rating, "Built around" chips, in-season produce
+   `pick`  — Dave's Picks (the live market update)
+   `alert` — errors only; kept separate so it can't be read as a pick
+
+   Declared in @theme, not :root, so these are real Tailwind colours:
+   `bg-pane`, `text-text/60`, `fill-pick`. That matters — an opacity modifier
+   on a bare `var(--x)` arbitrary value (`text-[var(--text)]/60`) silently
+   compiles to *nothing* in Tailwind v4, which builds clean and renders
+   unstyled. Every neutral here is an alpha tint of `text`, so the whole UI
+   stays a tint of the same warm bone. */
+@theme {
+  --color-ground: #131211;
+  --color-pane: #1b1a18;
+  --color-text: #ede9e3;
+
+  --color-match: #9fc08a;
+  --color-match-soft: #bad4a8;
+  --color-match-dim: #5c7350;
+
+  --color-pick: #c4453a;
+  --color-pick-soft: #d9756b;
+  --color-pick-dim: #6e2f29;
+
+  --color-alert: #9e5a4e;
+  --color-alert-soft: #c08878;
+}
+
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 body {
@@ -10,6 +41,7 @@ body {
   overflow: hidden;
   user-select: none;
   cursor: default;
+  background: var(--color-ground);
+  color: var(--color-text);
   font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
 }
-

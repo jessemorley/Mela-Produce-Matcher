@@ -1,8 +1,9 @@
-// PROTOTYPE — exactly three ingredient icons, shared by every view.
+// Exactly three ingredient icons, shared by every view.
 //
 // Produce names come from Claude reading a live newsletter, so a per-name
 // icon table would drift out of date. Key on the coarsest thing that's always
-// known instead: fruit, vegetable, or pantry.
+// known instead: fruit, vegetable, or pantry. Same reasoning the old
+// TYPE_STYLE emoji table used.
 //
 // Note the asymmetry in the data: market produce carries a Fruit/Vegetable
 // type, but a stored Ingredient is only `{display, name, pantry}` — no

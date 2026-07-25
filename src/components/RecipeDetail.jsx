@@ -1,4 +1,5 @@
-import { ExternalLink, Clock, User, Heart, Check, Ban } from "lucide-react";
+import { ExternalLink, Clock, Heart } from "lucide-react";
+import { ingredientIcon } from "./icons.js";
 
 const { invoke } = window.__TAURI__.core;
 
@@ -10,21 +11,25 @@ function inList(list, name) {
   });
 }
 
-export default function RecipeDetail({ recipe, onRecipesChange }) {
+// `surfaceClass` makes the body its own standalone pane — used by the In
+// Season stack, where each recipe *is* a pane rather than sitting inside one.
+// Padding is identical either way, so a card is indistinguishable from the
+// detail pane; only the surface differs.
+export default function RecipeDetail({ recipe, surfaceClass = "" }) {
   const ingredients = recipe.ingredients || [];
   // Dave's Picks (live market update) take precedence over the seasonal
   // table when a key ingredient is in both, matching the backend's scoring.
   const pickMatches = recipe.pick_matches || [];
   const seasonalMatches = recipe.seasonal_matches || [];
 
-  // Which tag (if any) applies to a given ingredient name: Dave's Pick beats
-  // In Season when both apply.
-  function tagFor(name) {
-    if (!name) return null;
-    if (inList(pickMatches, name)) return "pick";
-    if (inList(seasonalMatches, name)) return "seasonal";
-    return null;
-  }
+  const hit = (name) =>
+    !!name && (inList(pickMatches, name) || inList(seasonalMatches, name));
+
+  // key_ingredients is a bare name list, so the pantry flag has to come from
+  // the matching ingredient row. Unanalysed lines have no name and no flag —
+  // those fall through to produce, which is the commoner case.
+  const isPantry = (n) =>
+    ingredients.find((i) => i.name && i.name.toLowerCase() === n.toLowerCase())?.pantry ?? false;
 
   // Index carried alongside each row so duplicate display lines (e.g. two
   // "1 clove garlic" entries) still get unique React keys.
@@ -32,164 +37,143 @@ export default function RecipeDetail({ recipe, onRecipesChange }) {
   const produceRows = indexed.filter(({ ingredient }) => !ingredient.pantry);
   const pantryRows = indexed.filter(({ ingredient }) => ingredient.pantry);
 
-  function IngredientRow({ ingredient }) {
-    const tag = ingredient.pantry ? null : tagFor(ingredient.name);
-    const highlit = tag !== null;
-    return (
-      <div
-        className={`flex items-center justify-between p-2.5 rounded-lg border ${
-          highlit
-            ? "border-emerald-500/20 bg-emerald-50/60 text-slate-800"
-            : "border-slate-200/60 text-slate-500"
-        }`}
-      >
-        <div className="flex items-center space-x-2.5 min-w-0">
-          <div
-            className={`w-4 h-4 rounded flex items-center justify-center shrink-0 ${
-              highlit ? "bg-emerald-500 text-white" : "border border-slate-300"
-            }`}
-          >
-            {highlit && <Check className="w-3 h-3" />}
-          </div>
-          <span className="relative group/tooltip text-xs truncate capitalize">
-            {ingredient.name || ingredient.display}
-            {ingredient.name && ingredient.name !== ingredient.display && (
-              <span className="pointer-events-none absolute left-0 top-full mt-1 z-30 hidden group-hover/tooltip:block whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-[10px] normal-case text-white shadow-lg">
-                {ingredient.display}
-              </span>
-            )}
-          </span>
-        </div>
-        {tag === "pick" && (
-          <span className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold shrink-0">
-            Dave's Pick
-          </span>
-        )}
-        {tag === "seasonal" && (
-          <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded font-bold shrink-0">
-            In Season
-          </span>
-        )}
-      </div>
-    );
-  }
-
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-start justify-between">
-        <div className="space-y-2">
-          <h2 className="text-2xl font-black text-slate-900 leading-tight">{recipe.title}</h2>
-          <div className="flex items-center gap-3 text-xs text-slate-500">
-            {recipe.total_time && (
-              <span className="flex items-center bg-slate-100 px-2 py-1 rounded">
-                <Clock className="w-3.5 h-3.5 mr-1 text-emerald-600" />
-                {recipe.total_time}
-              </span>
-            )}
-            {recipe.yield && (
-              <span className="flex items-center bg-slate-100 px-2 py-1 rounded">
-                <User className="w-3.5 h-3.5 mr-1 text-blue-600" />
-                {recipe.yield}
-              </span>
-            )}
-            {recipe.favorite && <Heart className="w-4 h-4 text-rose-500 fill-rose-500" />}
-          </div>
-        </div>
-        <div className="shrink-0 flex items-center space-x-2">
-          <button
-            onClick={async () =>
-              onRecipesChange(
-                await invoke("set_excluded", {
-                  id: recipe.id,
-                  excluded: !recipe.excluded,
-                }),
-              )
-            }
-            title={
-              recipe.excluded
-                ? "Include this recipe in seasonal matching"
-                : "Never match this recipe against seasonal produce"
-            }
-            className={`flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border transition-all ${
-              recipe.excluded
-                ? "border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200"
-                : "border-slate-200 text-slate-500 hover:bg-slate-100"
-            }`}
-          >
-            <Ban className="w-3.5 h-3.5" />
-            <span>{recipe.excluded ? "Excluded" : "Exclude"}</span>
-          </button>
-          <button
-            onClick={() => invoke("open_recipe", { id: recipe.id })}
-            className="flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium bg-emerald-500 text-white rounded-lg shadow-sm hover:bg-emerald-600 transition-all"
-          >
-            <span>Open in Mela</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {recipe.key_ingredients?.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] uppercase tracking-wider text-slate-400">Built around</span>
-          {recipe.key_ingredients.map((ing) => {
-            const tag = tagFor(ing);
-            return (
-              <span
-                key={ing}
-                className={`text-[11px] px-2 py-0.5 rounded ${
-                  tag === "pick"
-                    ? "bg-amber-100 text-amber-700 font-medium"
-                    : tag === "seasonal"
-                      ? "bg-emerald-100 text-emerald-700 font-medium"
-                      : "bg-slate-100 text-slate-600"
-                }`}
-              >
-                {ing}
-              </span>
-            );
-          })}
+    <div className={`overflow-hidden pb-16 ${surfaceClass}`}>
+      {/* Full-bleed banner. Mela's photos are bright, high-key and shot on
+          white, so a scrim is doing real work here: without it the image ends
+          in a hard bright line against the near-black pane, and the title
+          below it loses its footing. */}
+      {recipe.image && (
+        <div className="relative h-52 w-full overflow-hidden">
+          <img src={recipe.image} alt="" className="h-full w-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-b from-pane/10 via-pane/55 to-pane" />
         </div>
       )}
 
-      {recipe.description && (
-        <div className="space-y-3">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Recipe</h3>
-          <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-wrap">
+      <div className={`@container px-10 ${recipe.image ? "relative -mt-14" : "pt-9"}`}>
+        {/* Container query, not viewport: this same body also renders as a
+            stacked card inside the In Season pane, so it has to react to its
+            own width. Below 30rem the button wraps onto its own line rather
+            than squeezing the title into two-word lines. */}
+        <div className="flex flex-col items-start gap-4 @[30rem]:flex-row @[30rem]:items-start @[30rem]:justify-between @[30rem]:gap-8">
+          <div className="min-w-0 @[30rem]:flex-1">
+            {/* Whole line takes the figure's style — 13px, medium, normal
+                tracking — so only colour separates the number from the word. */}
+            {typeof recipe.rating === "number" && (
+              <p className="mb-3 text-[13px] font-medium text-text/45">
+                <span className="tabular-nums text-match">
+                  {Math.round(recipe.rating * 100)}
+                </span>{" "}
+                Match
+              </p>
+            )}
+            <h2 className="text-[27px] font-semibold leading-[1.18] tracking-tight text-text">
+              {recipe.title}
+            </h2>
+            <div className="mt-4 flex items-center gap-4 text-[12px] text-text/40">
+              {recipe.total_time && (
+                <span className="flex items-center gap-1.5">
+                  <Clock className="h-3.5 w-3.5" />
+                  {recipe.total_time}
+                </span>
+              )}
+              {recipe.yield && <span>{recipe.yield}</span>}
+              {recipe.favorite && (
+                <Heart className="h-3.5 w-3.5 fill-pick text-pick" />
+              )}
+              {recipe.excluded && <span className="text-alert-soft">Excluded</span>}
+            </div>
+          </div>
+          {/* Exclude lives on the list row's context menu now — it's rare
+              per-recipe housekeeping, not something to sit beside the one
+              button people actually came here to press. */}
+          <div className="flex shrink-0 gap-2">
+            <button
+              onClick={() => invoke("open_recipe", { id: recipe.id })}
+              className="flex items-center gap-1.5 rounded-xl bg-text px-3 py-1.5 text-[12px] font-medium text-ground hover:brightness-110"
+            >
+              Open in Mela <ExternalLink className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Every chip carries an icon — produce or pantry — so the icon reads
+            as "what kind of thing this is", and the fill alone carries "in
+            season". An icon only on a match conflated the two. */}
+        {recipe.key_ingredients?.length > 0 && (
+          <div className="mt-8">
+            <p className="mb-3 text-[9.5px] uppercase tracking-[0.18em] text-text/32">
+              Built around
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {recipe.key_ingredients.map((k) => {
+                const on = hit(k);
+                const Icon = ingredientIcon(isPantry(k));
+                return (
+                  <span
+                    key={k}
+                    className={`flex items-center gap-2 rounded-xl px-3 py-1.5 text-[13px] capitalize ${
+                      on
+                        ? "bg-match/12 text-match-soft"
+                        : "bg-text/5 text-text/55"
+                    }`}
+                  >
+                    <Icon
+                      className={`h-3.5 w-3.5 shrink-0 ${
+                        on ? "text-match" : "text-text/35"
+                      }`}
+                      strokeWidth={1.75}
+                    />
+                    {k}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {recipe.description && (
+          <p className="mt-8 whitespace-pre-wrap text-[13.5px] leading-[1.75] text-text/60">
             {recipe.description}
           </p>
-        </div>
-      )}
+        )}
 
-      {ingredients.length > 0 && (
-        <div className="space-y-3">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Ingredients</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
-            <div className="space-y-2">
-              <h4 className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
-                Produce
-              </h4>
-              {produceRows.map(({ ingredient, index }) => (
-                <IngredientRow key={index} ingredient={ingredient} />
-              ))}
-              {produceRows.length === 0 && (
-                <p className="text-[11px] text-slate-400">No fresh produce.</p>
-              )}
-            </div>
-            <div className="space-y-2">
-              <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                Pantry
-              </h4>
-              {pantryRows.map(({ ingredient, index }) => (
-                <IngredientRow key={index} ingredient={ingredient} />
-              ))}
-              {pantryRows.length === 0 && (
-                <p className="text-[11px] text-slate-400">No pantry items.</p>
-              )}
-            </div>
-          </div>
+        <div className="mt-10 grid grid-cols-2 gap-x-10 gap-y-2">
+          <Col title="Produce" rows={produceRows} hit={hit} />
+          <Col title="Pantry" rows={pantryRows} hit={() => false} />
         </div>
-      )}
+      </div>
+    </div>
+  );
+}
+
+// Text colour alone marks a seasonal match — no checkbox, which would imply
+// availability, and no row fill, which competes with the chips above. An
+// unfixed line (no name) shows its raw display text in italic alert colour.
+function Col({ title, rows, hit }) {
+  return (
+    <div>
+      <p className="mb-3 text-[9.5px] uppercase tracking-[0.18em] text-text/32">{title}</p>
+      <div className="space-y-0.5">
+        {rows.map(({ ingredient, index }) => (
+          <div
+            key={index}
+            title={ingredient.name ? ingredient.display : undefined}
+            className={`truncate px-3 py-1.5 text-[13px] capitalize ${
+              ingredient.name ? "" : "italic"
+            } ${
+              hit(ingredient.name)
+                ? "text-match-soft"
+                : ingredient.name
+                  ? "text-text/60"
+                  : "text-alert-soft/75"
+            }`}
+          >
+            {ingredient.name || ingredient.display}
+          </div>
+        ))}
+        {rows.length === 0 && <p className="px-3 text-[12.5px] text-text/22">None.</p>}
+      </div>
     </div>
   );
 }

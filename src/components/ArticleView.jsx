@@ -23,6 +23,8 @@ function sanitizeArticle(html) {
   return doc.body;
 }
 
+// The one place in the app with real prose, so it gets a larger body size and
+// looser leading than any other pane.
 export default function ArticleView({ title, html, onBack }) {
   const articleRef = useRef(null);
 
@@ -47,19 +49,41 @@ export default function ArticleView({ title, html, onBack }) {
   }, []);
 
   return (
-    <div className="p-6">
+    <div className="px-10 pb-16 pt-9">
       <button
         onClick={onBack}
-        className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-900 mb-4"
+        className="mb-6 flex items-center gap-1.5 text-[11.5px] text-text/45 hover:brightness-125"
       >
-        <ChevronLeft className="w-3.5 h-3.5" />
+        <ChevronLeft className="h-3.5 w-3.5" />
         Back
       </button>
-      <h2 className="text-lg font-bold text-slate-900 mb-4">{title}</h2>
+
+      <h2 className="text-[27px] font-semibold leading-[1.18] tracking-tight text-text">
+        {title}
+      </h2>
+
       <article
         ref={articleRef}
-        className="text-sm text-slate-600 leading-relaxed space-y-3 [&_a]:text-emerald-600 [&_a]:underline [&_img]:max-w-full [&_img]:rounded-lg"
+        className="prose-newsletter mt-7 text-[14.5px] leading-[1.8] text-text/68"
       />
+
+      <style>{`
+        .prose-newsletter > * + * { margin-top: 1.1em; }
+        .prose-newsletter h3 {
+          margin-top: 2em;
+          font-size: 9.5px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.18em;
+          color: color-mix(in oklab, var(--color-text) 32%, transparent);
+        }
+        .prose-newsletter a {
+          color: var(--color-match);
+          text-decoration: none;
+          border-bottom: 1px solid color-mix(in oklab, var(--color-match) 35%, transparent);
+        }
+        .prose-newsletter img { max-width: 100%; border-radius: 12px; }
+      `}</style>
     </div>
   );
 }

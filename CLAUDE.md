@@ -105,8 +105,10 @@ the user verifies UI/UX changes visually themselves in the running
    to the one being fixed, since Mela repeats common lines ("1 tsp salt")
    verbatim across many recipes — fixing it once shouldn't mean re-typing
    the same correction for every recipe that has it.
-5. `set_excluded(id, excluded)` — the "Exclude" toggle in `RecipeDetail.jsx`'s
-   header. Sets `Recipe.excluded`, a user-marked "this recipe has no
+5. `set_excluded(id, excluded)` — the "Exclude"/"Include" item on the
+   right-click context menu of any recipe row (both list views; rare
+   housekeeping, so it isn't a button beside "Open in Mela"). Sets
+   `Recipe.excluded`, a user-marked "this recipe has no
    seasonal-produce story" flag (a vegan cheese sauce). An excluded recipe is
    skipped by `match_recipes`, by `analyze_new_recipes` (so excluding before
    the first analysis also saves the Claude call), and by both
@@ -143,7 +145,7 @@ the user verifies UI/UX changes visually themselves in the running
    substring matching was the original rule and would rank a corned beef
    recipe as seasonal when corn is in season.
 7. `list_recipes` — returns the full local `recipes.json` as-is, for the
-   frontend's "Saved Recipes" browse view (independent of any ranking).
+   frontend's "All Recipes" browse view (independent of any ranking).
 
 Only analysed recipes can ever match, since scoring reads `key_ingredients`
 exclusively. A fresh install shows zero matches until "Sync Now" runs.
@@ -204,30 +206,52 @@ than a real error.
 **Frontend** (`src/App.jsx` + `src/components/`) listens for two events —
 `status` (free-text progress) and `produce` (`{fruit, vegetable, pick,
 featured}`). Ranked recipes arrive as the return value of `match_recipes`,
-not as events. Produce items render with a colored emoji tile keyed by type
-(`TYPE_STYLE` in `RecipeList.jsx`, Fruit vs Vegetable) rather than per-item icons — Claude's
-produce names come dynamically from the live newsletter, so a fixed
-name→icon lookup would drift out of date; keying on type instead always
-matches, at the cost of visual variety between individual items.
+not as events. Exactly three ingredient icons exist (`icons.js`: apple =
+fruit, sprout = vegetable, wheat = pantry), keyed on type and never on name —
+Claude's produce names come dynamically from the live newsletter, so a fixed
+name→icon lookup would drift out of date; keying on type always matches, at
+the cost of visual variety between individual items.
 
 Three-pane layout (`Sidebar` / `RecipeList` / main canvas in `App.jsx`):
-left nav (Harvest Matches / This Week's Produce / Saved Recipes) with live
-counts, a middle list that switches view based on the selected nav item,
-and a right detail pane (`RecipeDetail.jsx`) showing whichever recipe is
-selected. `match_recipes` returns each ranked recipe flattened with its full
-record plus `rating`/`pick_matches`/`seasonal_matches`, so the detail pane
-needs no merging — it falls back to the Saved Recipes list only for recipes
-that never matched. The left nav's "In Season" tab (formerly "This Week's
-Produce") lists both Dave's Picks (market update) and the seasonal-table
-produce for the current season. `RecipeDetail.jsx` shows the stored
-`key_ingredients` as a "Built around" row, then the recipe text, then the
-ingredients below it split into Produce and Pantry columns by each
-ingredient's own `pantry` flag — no JS-side
-reimplementation of any Rust logic, since the backend now stores the
-classification directly. Each row shows `ingredient.name` (capitalised via
-CSS, not string mutation) with the raw `display` line as a hover tooltip;
-Tauri's WKWebView doesn't reliably render the native `title` attribute, so
-the tooltip is a CSS-only `group`-hover element instead. `ArticleView.jsx`
+left nav (Best Matches / In Season / All Recipes) with live counts, a middle
+list that switches view based on the selected nav item, and a right detail
+pane (`RecipeDetail.jsx`).
+
+**One tagged `selection` drives the detail pane**, `{kind: "recipe"|"produce"
+|"none"}`. Switching nav *browses*; only clicking a row selects, so the pane
+holds whatever you last picked across tab changes. Selection is therefore
+exclusive — picking produce clears the recipe highlight and vice versa,
+because one pane shows one thing. (Previously a separate `activeRecipeId`
+and produce selection both fed the pane, which chose between them by checking
+`nav`, so each view silently overwrote what the other was showing.)
+
+`match_recipes` returns each ranked recipe flattened with its full record
+plus `rating`/`pick_matches`/`seasonal_matches`, so the detail pane needs no
+merging — it falls back to the All Recipes list only for recipes that never
+matched. That fallback is what lets excluding a recipe drop it out of Best
+Matches immediately while the detail pane keeps showing it, rather than going
+blank under the user.
+
+The "In Season" tab renders both layers as tiles (Dave's Picks from the
+market update, then the seasonal table for the current season), sorted by how
+many of your recipes use each item and dimmed when none do. Selecting produce
+fills the detail pane with its matching recipes as stacked full recipe cards
+— the same `RecipeDetail` body, with `surfaceClass` making each card its own
+pane. `App.jsx` re-derives those matches from the current ranked list rather
+than trusting the tile's snapshot, so an exclusion can't leave a stale card
+up.
+
+`RecipeDetail.jsx` shows an optional full-bleed image banner (with a scrim —
+Mela's photos are bright and shot on white, so without it the image ends in a
+hard line against the near-black pane), the stored `key_ingredients` as a
+"Built around" chip row, the recipe text, then the ingredients split into
+Produce and Pantry columns by each ingredient's own `pantry` flag — no
+JS-side reimplementation of any Rust logic, since the backend stores the
+classification directly. Its header uses a **container** query, not a
+viewport one: the same body renders as a narrow stacked card inside the In
+Season pane while the window is wide, so a viewport breakpoint would miss it.
+Rows show `ingredient.name` (capitalised via CSS, not string mutation) with
+the raw `display` line as the tooltip. `ArticleView.jsx`
 is a sanitized in-app reader for the full newsletter post (`sanitizeArticle`
 strips scripts/styles/forms/dangerous attributes), toggled in place of the
 detail pane; external links inside it route through `open_url` to the
@@ -243,12 +267,70 @@ line Mela repeats verbatim across recipes ("1 tsp salt"). `App.jsx` mirrors
 the backend's `unfixed_ingredients` count in JS (`countUnfixed`) so the
 banner updates immediately after a fix without waiting on a full resync.
 
-Dark mode only — no light theme, no `prefers-color-scheme` toggle.
+The queue's suggestion list is the point of that screen, not decoration:
+naming an ingredient "walnut" when the collection already says "walnut
+halves" silently splits one ingredient into two, so every canonical name
+already in the collection is ranked by fuzzy closeness (`rankNames.js`, Dice
+coefficient over bigrams) and seeded from the raw line before anything is
+typed. Picking an existing name carries its produce/pantry flag across; a
+genuinely new name is flagged. The queue is frozen when the modal opens —
+saving rewrites `recipes`, and a live queue would renumber under the user
+mid-fix.
+
+## Frontend styling and tests
+
+**Dark only — one palette, no light theme and no `prefers-color-scheme`
+toggle.** The palette lives in `src/index.css` in an `@theme` block, so
+`ground`/`pane`/`text`/`match`/`pick`/`alert` are real Tailwind colours
+(`bg-pane`, `text-text/60`, `fill-pick`). Declare them there, **not** in
+`:root` — an opacity modifier on a bare `var()` arbitrary value
+(`text-[var(--text)]/60`) silently compiles to *nothing* in Tailwind v4:
+`vite build` passes and the app renders unstyled. Note also that only
+Tailwind's standard opacity steps work; an off-step value needs brackets
+(`bg-text/[0.06]`, not `bg-text/6`). Neutrals are all alpha tints of `text`
+rather than a separate grey ramp. `color-scheme: dark` is set so native
+scrollbars and form controls match.
+
+Two pieces of pure frontend logic have tests, run with plain `node` (no
+runner, no framework, since the repo has no JS test setup):
+
+- `node src/components/parseProgress.test.js` — `parseProgress` parses the
+  status bar's progress line and is coupled to an exact `format!` string in
+  `lib.rs` (`"Analysing {seen}/{total}: {title}"`). If that wording changes
+  it returns null and the bar silently degrades to a spinner, so the test
+  pins the shape (including that the *other* message, `"Analysing 5 new
+  recipes..."`, must NOT parse).
+- `node src/components/rankNames.test.js` — the Fix queue's fuzzy matching,
+  whose threshold degrades silently if wrong.
+
+**Responsive rules** (the `.shell` block in `App.jsx`): one pane gives up
+width at a time, in priority order — detail first, then the list, then the
+sidebar. The detail pane needs no rule of its own since it's `flex-1` and
+absorbs surplus by default; it just has a `min-w-[300px]` floor. Two
+`clamp()`s then take over in sequence, and `--rail` carries the sidebar's
+contribution (width + gutter) so the list's clamp reads one expression in
+both regimes.
+
+| Width | Moving | Sidebar | List | Detail |
+|---|---|---|---|---|
+| ≥948 | detail | 240 | 368 | shrinking |
+| 948→880 | list | 240 | 368→300 | 300 |
+| 880→820 | sidebar | 240→180 | 300 | 300 |
+| <820 | sidebar hidden | — | 368→300 | ≥300 |
+| 630 | floor | — | 300 | 300 |
+
+Below 820px the sidebar is hidden, so nav and the status bar re-home to a
+compact strip at the top of the list pane (`NAV` in `nav.js` is shared by
+both so they can't drift). **Categories are unreachable there** — a long list
+with no room in a strip; an active filter can still be cleared via its chip
+but not set. `minWidth` in `tauri.conf.json` is 630, exactly list-min +
+detail-min + padding + gutter; below that CSS can't hold the floor.
 
 The app window uses a native macOS overlay title bar (`titleBarStyle:
-Overlay`, `hiddenTitle: true` in `tauri.conf.json`) — panes have their own
-`data-tauri-drag-region` spacer strips to keep the draggable area under the
-real traffic lights, there's no custom-drawn window chrome.
+Overlay`, `hiddenTitle: true` in `tauri.conf.json`) — a single full-width
+`data-tauri-drag-region` strip above the panes in `App.jsx` keeps the
+draggable area under the real traffic lights, there's no custom-drawn window
+chrome.
 
 Those strips only work because `capabilities/default.json` grants
 `core:window:allow-start-dragging` explicitly — `core:default` does *not*

@@ -1,392 +1,496 @@
-import { useState } from "react";
-import { Search, Check, RefreshCw, Heart, Clock } from "lucide-react";
+import { Search, Clock, Heart, Newspaper, Star, BookOpen, Sparkles } from "lucide-react";
+import { NAV } from "./nav.js";
+import { produceIcon, VEGETABLE } from "./icons.js";
+import { FilterChip, ListEmpty } from "./ListStates.jsx";
+import StatusBar from "./StatusBar.jsx";
 
-const { invoke } = window.__TAURI__.core;
-
-// Produce names come dynamically from Claude reading the live newsletter,
-// so they won't reliably match a small hand-picked name→emoji table (the
-// mockup only covered 12 fixed items) — key on type instead, which always
-// matches.
-const TYPE_STYLE = {
-  Fruit: { emoji: "🍎", color: "bg-orange-100 text-orange-700" },
-  Vegetable: { emoji: "🥬", color: "bg-emerald-100 text-emerald-700" },
-};
-
-function ProduceIcon({ type }) {
-  const { emoji, color } = TYPE_STYLE[type];
+// Header of every list view — same slot, same chrome, so switching nav never
+// moves the pane's furniture.
+function ListHeader({ title, count, total }) {
   return (
-    <span className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-base ${color}`}>
-      {emoji}
-    </span>
+    <div className="flex items-baseline justify-between px-5 pb-4 pt-5">
+      <h2 className="text-[12.5px] font-medium text-text/70">{title}</h2>
+      <span className="text-[10.5px] tabular-nums text-text/30">
+        {total !== undefined && total !== count ? `${count} of ${total}` : count}
+      </span>
+    </div>
   );
 }
 
-function inList(list, name) {
-  const n = name.trim().toLowerCase();
-  return list.some((p) => {
-    const q = p.trim().toLowerCase();
-    return q === n || q.includes(n) || n.includes(q);
-  });
+function SearchField({ value, onChange }) {
+  return (
+    <div className="relative mx-3 mb-3">
+      <Search
+        className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-text/30"
+        strokeWidth={1.75}
+      />
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Search recipes"
+        className="w-full rounded-xl border-none bg-ground py-2.5 pl-9 pr-3 text-[11.5px] text-text/80 outline-none placeholder:opacity-60"
+      />
+    </div>
+  );
 }
 
 function MatchingView({
   rankedRecipes,
   activeRecipeId,
   onSelectRecipe,
-  searchQuery,
+  onContextMenu,
   selectedTag,
+  onClearTag,
   unanalyzedCount,
   onSyncNow,
   unfixedCount,
   onFixNow,
 }) {
-  const filtered = rankedRecipes
-    .filter((r) => r.title.toLowerCase().includes(searchQuery.toLowerCase()))
-    .filter((r) => !selectedTag || r.tags?.includes(selectedTag));
+  const shown = rankedRecipes.filter((r) => !selectedTag || r.tags?.includes(selectedTag));
 
   return (
-    <div className="flex-1 overflow-y-auto flex flex-col">
-      {unanalyzedCount > 0 && (
-        <div className="p-3 flex items-center justify-between gap-2 bg-amber-50 border-b border-amber-100">
-          <span className="text-[11px] text-amber-800">
-            {unanalyzedCount} new {unanalyzedCount === 1 ? "recipe" : "recipes"} detected
-          </span>
-          <button
-            onClick={onSyncNow}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-all"
-          >
-            <RefreshCw className="w-3 h-3" />
-            Sync Now
-          </button>
+    <>
+      <ListHeader title="Best Matches" count={shown.length} total={rankedRecipes.length} />
+
+      {/* Banners first: they're notifications about the collection and don't
+          change with the view. The filter chip sits directly above the list
+          it's filtering. */}
+      {(unanalyzedCount > 0 || unfixedCount > 0) && (
+        <div className="mx-3 mb-3 space-y-1.5">
+          {unanalyzedCount > 0 && (
+            <button
+              onClick={onSyncNow}
+              className="flex w-full items-center justify-between rounded-xl bg-pick/10 px-3.5 py-2 text-left transition-colors hover:brightness-125"
+            >
+              <span className="text-[11.5px] text-pick-soft">{unanalyzedCount} new</span>
+              <span className="text-[11px] font-medium text-pick">Sync</span>
+            </button>
+          )}
+          {unfixedCount > 0 && (
+            <button
+              onClick={onFixNow}
+              className="flex w-full items-center justify-between rounded-xl bg-alert/12 px-3.5 py-2 text-left transition-colors hover:brightness-125"
+            >
+              <span className="text-[11.5px] text-alert-soft">{unfixedCount} not found</span>
+              <span className="text-[11px] font-medium text-alert">Fix</span>
+            </button>
+          )}
         </div>
       )}
-      {unfixedCount > 0 && (
-        <div className="p-3 flex items-center justify-between gap-2 bg-rose-50 border-b border-rose-100">
-          <span className="text-[11px] text-rose-800">
-            {unfixedCount} {unfixedCount === 1 ? "ingredient" : "ingredients"} not found
-          </span>
-          <button
-            onClick={onFixNow}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-medium bg-rose-500 text-white rounded-lg hover:bg-rose-600 transition-all"
-          >
-            Fix Now
-          </button>
-        </div>
-      )}
-      <div className="divide-y divide-slate-100">
-        {filtered.map((rec) => (
-          <div
-            key={rec.id}
-            onClick={() => onSelectRecipe(rec.id)}
-            className={`p-3.5 flex gap-3 cursor-pointer transition-all ${
-              activeRecipeId === rec.id
-                ? "bg-slate-100 border-l-2 border-emerald-500"
-                : "hover:bg-slate-50"
-            }`}
-          >
-            {rec.image && (
-              <img
-                src={rec.image}
-                alt=""
-                className="w-14 h-14 shrink-0 rounded-lg object-cover"
-              />
-            )}
-            <div className="min-w-0">
-              <div className="flex justify-between items-start mb-1.5 gap-2">
-                <h3 className="text-xs font-bold text-slate-900 leading-tight">{rec.title}</h3>
+
+      {selectedTag && <FilterChip tag={selectedTag} onClear={onClearTag} />}
+
+      <div className="flex-1 overflow-y-auto px-3 pb-3">
+        {shown.map((rec) => {
+          const on = activeRecipeId === rec.id;
+          return (
+            <button
+              key={rec.id}
+              onClick={() => onSelectRecipe(rec.id)}
+              onContextMenu={onContextMenu(rec)}
+              className={`mb-1 flex w-full items-start gap-3.5 rounded-xl px-3.5 py-3 text-left transition-colors hover:bg-white/[0.035] ${
+                on ? "bg-text/7" : ""
+              }`}
+            >
+              <span
+                className={`w-7 shrink-0 pt-px text-right text-[14px] font-medium tabular-nums ${
+                  rec.rating > 0.7
+                    ? "text-match"
+                    : rec.rating > 0.4
+                      ? "text-match-dim"
+                      : "text-text/28"
+                }`}
+              >
+                {Math.round(rec.rating * 100)}
+              </span>
+              <span className="min-w-0 flex-1">
                 <span
-                  title="Seasonal match rating"
-                  className="shrink-0 text-[10px] font-bold text-emerald-600"
+                  className={`block text-[12.5px] leading-snug ${
+                    on ? "text-text/95" : "text-text/60"
+                  }`}
                 >
-                  {Math.round(rec.rating * 100)}%
+                  {rec.title}
                 </span>
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {rec.pick_matches.map((ing) => (
-                  <span
-                    key={ing}
-                    className="text-[9px] bg-amber-50 px-1.5 py-0.5 rounded text-amber-700"
-                  >
-                    <Check className="w-2.5 h-2.5 inline -mt-px mr-0.5" />
-                    {ing}
-                  </span>
-                ))}
-                {rec.seasonal_matches.map((ing) => (
-                  <span
-                    key={ing}
-                    className="text-[9px] bg-emerald-50 px-1.5 py-0.5 rounded text-emerald-700"
-                  >
-                    <Check className="w-2.5 h-2.5 inline -mt-px mr-0.5" />
-                    {ing}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-        ))}
-        {filtered.length === 0 && (
-          <p className="p-3.5 text-xs text-slate-400">
-            {unanalyzedCount > 0
-              ? "No matches yet — click \"Sync Now\" to analyse your recipes."
-              : "Nothing in your collection matches this week's produce."}
-          </p>
+                <span className="mt-1.5 block truncate text-[10.5px] capitalize text-text/32">
+                  {[...rec.pick_matches, ...rec.seasonal_matches].join(" · ")}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+
+        {shown.length === 0 && (
+          <ListEmpty
+            icon={Sparkles}
+            title={
+              selectedTag ? "Nothing here" : unanalyzedCount > 0 ? "Nothing analysed yet" : "No matches"
+            }
+            body={
+              selectedTag
+                ? `No ${selectedTag.toLowerCase()} recipes match this week's produce.`
+                : unanalyzedCount > 0
+                  ? "Your recipes need analysing before they can be matched against what's in season."
+                  : "Nothing in your collection matches this week's produce."
+            }
+            action={
+              selectedTag
+                ? { label: "Clear filter", onClick: onClearTag }
+                : unanalyzedCount > 0
+                  ? { label: "Sync now", onClick: onSyncNow }
+                  : null
+            }
+          />
         )}
       </div>
-    </div>
+    </>
   );
 }
 
-function ProduceRow({ name, type, meta, dot }) {
-  return (
-    <div className="p-2.5 rounded-lg border border-emerald-500/20 bg-emerald-50/10 flex items-center justify-between transition-all hover:border-emerald-500/40">
-      <div className="flex items-center space-x-2.5">
-        {type ? <ProduceIcon type={type} /> : dot}
-        <div>
-          <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1 capitalize">
-            {name}
-            {meta?.pick && <span title="Pick of the week">★</span>}
-          </h4>
-          {meta?.label && <span className="text-[9px] text-slate-400">{meta.label}</span>}
-        </div>
-      </div>
-      <div className="w-5 h-5 shrink-0 rounded-full bg-emerald-500 text-white flex items-center justify-center">
-        <Check className="w-3.5 h-3.5" />
-      </div>
-    </div>
-  );
-}
-
-// Two layers: Dave's Picks come from the live market update; Seasonal
-// produce comes from the stable per-season table (see seasonal_in_season in
-// lib.rs). A market item already in the seasonal list isn't repeated below.
-function ProduceView({ produce, seasonal, searchQuery }) {
-  const q = searchQuery.toLowerCase();
+function splitProduce(produce, seasonal) {
   const market = [
     ...produce.fruit.map((name) => ({ name, type: "Fruit" })),
     ...produce.vegetable.map((name) => ({ name, type: "Vegetable" })),
-  ].filter((item) => item.name.toLowerCase().includes(q));
+  ];
+  const marketNames = new Set(market.map((m) => m.name.toLowerCase()));
+  const seasonalOnly = (seasonal.produce || []).filter((n) => !marketNames.has(n.toLowerCase()));
+  return { market, seasonalOnly };
+}
 
-  const marketNames = new Set([...produce.fruit, ...produce.vegetable].map((n) => n.toLowerCase()));
-  const seasonalItems = (seasonal.produce || [])
-    .filter((name) => !marketNames.has(name.toLowerCase()))
-    .filter((name) => name.toLowerCase().includes(q));
-
-  return (
-    <div className="flex-1 overflow-y-auto p-3 space-y-5">
-      <div className="space-y-2">
-        <h4 className="text-[10px] font-bold uppercase tracking-wider text-amber-600">
-          Dave's Picks
-        </h4>
-        {market.map((item) => (
-          <ProduceRow
-            key={item.name}
-            name={item.name}
-            type={item.type}
-            meta={{
-              pick: inList(produce.pick, item.name),
-              label: item.type + (inList(produce.featured, item.name) ? " · Featured" : ""),
-            }}
-          />
-        ))}
-        {market.length === 0 && <p className="text-[11px] text-slate-400">Nothing this week.</p>}
-      </div>
-
-      <div className="space-y-2">
-        <h4 className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">
-          In Season{seasonal.season ? ` · ${seasonal.season}` : ""}
-        </h4>
-        {seasonalItems.map((name) => (
-          <ProduceRow
-            key={name}
-            name={name}
-            dot={<span className="w-8 h-8 shrink-0 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-base">🌿</span>}
-          />
-        ))}
-        {seasonalItems.length === 0 && (
-          <p className="text-[11px] text-slate-400">Nothing more in season.</p>
-        )}
-      </div>
-    </div>
+function recipesUsing(rankedRecipes, name) {
+  return rankedRecipes.filter((r) =>
+    [...r.pick_matches, ...r.seasonal_matches].some((m) => m.toLowerCase() === name.toLowerCase()),
   );
 }
 
-function SavedRecipeRow({ rec, activeRecipeId, onSelectRecipe }) {
-  return (
-    <div
-      key={rec.id}
-      onClick={() => onSelectRecipe(rec.id)}
-      className={`p-3.5 flex gap-3 cursor-pointer transition-all ${
-        activeRecipeId === rec.id ? "bg-slate-100" : "hover:bg-slate-50"
-      }`}
-    >
-      {rec.image && (
-        <img
-          src={rec.image}
-          alt=""
-          className="w-14 h-14 shrink-0 rounded-lg object-cover"
+// Two layers: Dave's Picks come from the live market update; seasonal produce
+// comes from the stable per-season table (see seasonal_in_season in lib.rs).
+// Tiles are sorted by how many of your recipes use the item and dim when none
+// do — the one fact the old flat list never showed.
+function ProduceView({ produce, seasonal, rankedRecipes, selectedProduce, onSelectProduce, onOpenArticle }) {
+  const { market, seasonalOnly } = splitProduce(produce, seasonal);
+
+  const decorate = (name, tone, type) => ({
+    name,
+    tone,
+    type,
+    starred: produce.pick.includes(name),
+    uses: recipesUsing(rankedRecipes, name),
+  });
+
+  const byUse = (a, b) => b.uses.length - a.uses.length || a.name.localeCompare(b.name);
+  const marketTiles = market.map((m) => decorate(m.name, "pick", m.type)).sort(byUse);
+  const seasonTiles = seasonalOnly.map((n) => decorate(n, "seasonal")).sort(byUse);
+
+  // Same idiom as the recipe rows: transparent at rest, filled only when
+  // selected. "Nothing uses this" is carried by dimmed text and icon rather
+  // than a third background shade.
+  const Tile = ({ item }) => {
+    const on = selectedProduce?.name === item.name;
+    const Icon = produceIcon(item.type);
+    const cookable = item.uses.length > 0;
+    return (
+      <button
+        onClick={() => onSelectProduce(on ? null : item)}
+        className={`flex w-full min-w-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-white/[0.035] ${
+          on ? "bg-text/7" : ""
+        }`}
+      >
+        <Icon
+          className={`h-4 w-4 shrink-0 ${
+            item.tone === "pick"
+              ? cookable
+                ? "text-pick"
+                : "text-pick-dim"
+              : cookable
+                ? "text-match"
+                : "text-match-dim"
+          }`}
+          strokeWidth={1.75}
         />
-      )}
-      <div className="min-w-0">
-        <h3 className="text-xs font-bold text-slate-800">{rec.title}</h3>
-        {(rec.total_time || rec.tags?.length > 0 || rec.favorite) && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-2 text-[10px] text-slate-400">
-            {rec.favorite && <Heart className="w-3 h-3 text-rose-500 fill-rose-500" />}
-            {rec.total_time && (
-              <span className="flex items-center">
-                <Clock className="w-3 h-3 mr-1" />
-                {rec.total_time}
-              </span>
-            )}
-            {rec.tags?.map((tag) => (
-              <span key={tag} className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">
-                {tag}
-              </span>
-            ))}
-          </div>
+        <span
+          className={`flex min-w-0 flex-1 items-center gap-1.5 text-[13px] capitalize ${
+            on ? "text-text/95" : cookable ? "text-text/70" : "text-text/35"
+          }`}
+        >
+          <span className="truncate">{item.name}</span>
+          {item.starred && (
+            <Star className="h-3 w-3 shrink-0 fill-pick text-pick" />
+          )}
+        </span>
+        <span
+          className={`shrink-0 text-[10.5px] tabular-nums ${
+            cookable ? "text-text/40" : "text-text/20"
+          }`}
+        >
+          {cookable ? item.uses.length : "—"}
+        </span>
+      </button>
+    );
+  };
+
+  return (
+    <>
+      <ListHeader title="In Season" count={market.length + seasonalOnly.length} />
+
+      <div className="mx-3 mb-3">
+        <button
+          onClick={onOpenArticle}
+          className="flex w-full items-center gap-2.5 rounded-xl bg-text/5 px-3.5 py-2.5 text-left hover:brightness-125"
+        >
+          <Newspaper className="h-3.5 w-3.5 shrink-0 text-text/40" strokeWidth={1.75} />
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-text/55">
+            Read the market update
+          </span>
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-3 pb-3">
+        <p className="px-2 pb-2 text-[9.5px] uppercase tracking-[0.18em] text-pick">
+          Dave's Picks
+        </p>
+        <div className="space-y-1">
+          {marketTiles.map((item) => (
+            <Tile key={item.name} item={item} />
+          ))}
+          {marketTiles.length === 0 && (
+            <p className="px-3 py-1.5 text-[11.5px] text-text/30">Nothing this week.</p>
+          )}
+        </div>
+
+        {seasonal.season && (
+          <>
+            <p className="px-2 pb-2 pt-6 text-[9.5px] uppercase tracking-[0.18em] text-match">
+              Also in {seasonal.season.toLowerCase()}
+            </p>
+            <div className="space-y-1">
+              {seasonTiles.map((item) => (
+                <Tile key={item.name} item={item} />
+              ))}
+              {seasonTiles.length === 0 && (
+                <p className="px-3 py-1.5 text-[11.5px] text-text/30">
+                  Nothing more in season.
+                </p>
+              )}
+            </div>
+          </>
         )}
       </div>
-    </div>
+    </>
   );
 }
 
-function SavedRecipesView({ recipes, activeRecipeId, onSelectRecipe, searchQuery, selectedTag }) {
+// Mirrors the backend's own buckets: excluded recipes are never analysed or
+// matched, so they belong in neither synced nor unsynced — own section, still
+// browsable and un-excludable.
+function SavedRecipesView({
+  recipes,
+  activeRecipeId,
+  onSelectRecipe,
+  onContextMenu,
+  searchQuery,
+  onSearchChange,
+  selectedTag,
+  onClearTag,
+}) {
   const filtered = recipes
     .filter((r) => r.title.toLowerCase().includes(searchQuery.toLowerCase()))
     .filter((r) => !selectedTag || r.tags?.includes(selectedTag));
-  // Excluded recipes are never analysed or matched, so they belong in
-  // neither bucket — own section, still browsable and un-excludable.
   const active = filtered.filter((r) => !r.excluded);
-  const excluded = filtered.filter((r) => r.excluded);
   const synced = active.filter((r) => r.key_ingredients?.length > 0);
   const unsynced = active.filter((r) => !(r.key_ingredients?.length > 0));
+  const excluded = filtered.filter((r) => r.excluded);
+
+  const Row = ({ rec, dim }) => {
+    const on = activeRecipeId === rec.id;
+    return (
+      <button
+        onClick={() => onSelectRecipe(rec.id)}
+        onContextMenu={onContextMenu(rec)}
+        className={`mb-1 flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-colors hover:brightness-125 ${
+          on ? "bg-text/7" : ""
+        } ${dim ? "opacity-50" : ""}`}
+      >
+        {/* Mela images are base64 data URIs and most recipes have none (150 of
+            215 image rows are external references), so the slot keeps its
+            footprint and falls back to the produce mark. */}
+        <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-text/5">
+          {rec.image ? (
+            <img src={rec.image} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <VEGETABLE className="h-[18px] w-[18px] text-text/22" strokeWidth={1.75} />
+          )}
+        </span>
+
+        <span className="min-w-0 flex-1">
+          <span className="flex items-baseline gap-2">
+            <span
+              className={`min-w-0 flex-1 text-[13px] leading-snug ${
+                on ? "text-text/95" : "text-text/65"
+              }`}
+            >
+              {rec.title}
+            </span>
+            {rec.favorite && (
+              <Heart className="h-3 w-3 shrink-0 fill-pick text-pick" />
+            )}
+          </span>
+          {(rec.total_time || rec.tags?.length > 0) && (
+            <span className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[10.5px] text-text/32">
+              {rec.total_time && (
+                <span className="flex items-center gap-1">
+                  <Clock className="h-2.5 w-2.5" />
+                  {rec.total_time}
+                </span>
+              )}
+              {rec.tags?.map((t) => (
+                <span key={t}>{t}</span>
+              ))}
+            </span>
+          )}
+        </span>
+      </button>
+    );
+  };
+
+  const Section = ({ title, rows, dim }) =>
+    rows.length > 0 && (
+      <>
+        <p className="px-3 pb-2 pt-5 text-[9.5px] uppercase tracking-[0.18em] text-text/32">
+          {title} · {rows.length}
+        </p>
+        {rows.map((rec) => (
+          <Row key={rec.id} rec={rec} dim={dim} />
+        ))}
+      </>
+    );
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      {synced.length > 0 && (
-        <div>
-          <h4 className="px-3.5 pt-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Synced ({synced.length})
-          </h4>
-          <div className="divide-y divide-slate-100">
-            {synced.map((rec) => (
-              <SavedRecipeRow
-                key={rec.id}
-                rec={rec}
-                activeRecipeId={activeRecipeId}
-                onSelectRecipe={onSelectRecipe}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-      {unsynced.length > 0 && (
-        <div>
-          <h4 className="px-3.5 pt-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Unsynced ({unsynced.length})
-          </h4>
-          <div className="divide-y divide-slate-100">
-            {unsynced.map((rec) => (
-              <SavedRecipeRow
-                key={rec.id}
-                rec={rec}
-                activeRecipeId={activeRecipeId}
-                onSelectRecipe={onSelectRecipe}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-      {excluded.length > 0 && (
-        <div>
-          <h4 className="px-3.5 pt-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Excluded ({excluded.length})
-          </h4>
-          <div className="divide-y divide-slate-100 opacity-60">
-            {excluded.map((rec) => (
-              <SavedRecipeRow
-                key={rec.id}
-                rec={rec}
-                activeRecipeId={activeRecipeId}
-                onSelectRecipe={onSelectRecipe}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-      {filtered.length === 0 && (
-        <p className="p-3.5 text-xs text-slate-400">No saved recipes match that search.</p>
-      )}
-    </div>
+    <>
+      <ListHeader title="All Recipes" count={filtered.length} total={recipes.length} />
+      <SearchField value={searchQuery} onChange={onSearchChange} />
+      {selectedTag && <FilterChip tag={selectedTag} onClear={onClearTag} />}
+
+      <div className="flex-1 overflow-y-auto px-3 pb-3">
+        <Section title="Synced" rows={synced} />
+        <Section title="Unsynced" rows={unsynced} />
+        <Section title="Excluded" rows={excluded} dim />
+        {filtered.length === 0 && (
+          <ListEmpty
+            icon={recipes.length === 0 ? BookOpen : Search}
+            title={recipes.length === 0 ? "No recipes yet" : "Nothing found"}
+            body={
+              recipes.length === 0
+                ? "Recipes sync from Mela when the app starts."
+                : selectedTag && searchQuery
+                  ? `No ${selectedTag.toLowerCase()} recipes match that search.`
+                  : selectedTag
+                    ? `Nothing in ${selectedTag.toLowerCase()} yet.`
+                    : "No recipes match that search."
+            }
+            action={selectedTag ? { label: "Clear filter", onClick: onClearTag } : null}
+          />
+        )}
+      </div>
+    </>
   );
 }
 
 export default function RecipeList({
   selectedNav,
+  onSelectNav,
+  counts,
   searchQuery,
   onSearchChange,
   selectedTag,
+  onClearTag,
   produce,
   seasonal,
   rankedRecipes,
   allRecipes,
   activeRecipeId,
   onSelectRecipe,
+  selectedProduce,
+  onSelectProduce,
+  onContextMenu,
   unanalyzedCount,
   onSyncNow,
   unfixedCount,
   onFixNow,
-  feedLink,
   onOpenArticle,
+  status,
+  busy,
+  onCancel,
 }) {
   return (
-    <div className="w-80 shrink-0 border-r border-slate-200/60 flex flex-col bg-white relative">
-      <div className="absolute inset-x-0 top-0 h-8 z-10" data-tauri-drag-region />
-      <div className="p-3 border-b border-slate-100 space-y-2">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search produce or recipes..."
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-100 border-none rounded-lg text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-          />
+    // Fluid, not stepped: the list gives up width continuously as the window
+    // narrows, so the detail pane holds at 300px the whole way down instead of
+    // the two trading a jump at each breakpoint. The middle term is what's
+    // left once the sidebar, gutters and a 300px detail pane are accounted for.
+    <section
+      className="flex shrink-0 flex-col overflow-hidden rounded-2xl bg-pane"
+      style={{ width: "clamp(300px, calc(100vw - var(--rail) - 340px), 23rem)" }}
+    >
+      {/* Below 820px the sidebar is gone, so nav and status have to live
+          somewhere: a compact strip at the top of this pane. Categories are
+          unreachable here — no room for a long list — but an active filter can
+          still be cleared via its chip. */}
+      <div className="min-[820px]:hidden">
+        <div className="flex gap-1 px-2.5 pt-2.5">
+          {NAV.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => onSelectNav(key)}
+              title={label}
+              className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-[11px] transition-colors hover:bg-white/[0.035] ${
+                selectedNav === key ? "bg-text/7 text-text/90" : "text-text/40"
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5 shrink-0" />
+              <span className="tabular-nums">{counts[key]}</span>
+            </button>
+          ))}
         </div>
-        {feedLink && (
-          <button
-            onClick={onOpenArticle}
-            className="text-[11px] text-emerald-600 hover:text-emerald-700"
-          >
-            Read the market update →
-          </button>
-        )}
       </div>
 
-      {selectedNav === "matching" && (
+      {selectedNav === "produce" ? (
+        <ProduceView
+          produce={produce}
+          seasonal={seasonal}
+          rankedRecipes={rankedRecipes}
+          selectedProduce={selectedProduce}
+          onSelectProduce={onSelectProduce}
+          onOpenArticle={onOpenArticle}
+        />
+      ) : selectedNav === "recipes" ? (
+        <SavedRecipesView
+          recipes={allRecipes}
+          activeRecipeId={activeRecipeId}
+          onSelectRecipe={onSelectRecipe}
+          onContextMenu={onContextMenu}
+          searchQuery={searchQuery}
+          onSearchChange={onSearchChange}
+          selectedTag={selectedTag}
+          onClearTag={onClearTag}
+        />
+      ) : (
         <MatchingView
           rankedRecipes={rankedRecipes}
           activeRecipeId={activeRecipeId}
           onSelectRecipe={onSelectRecipe}
-          searchQuery={searchQuery}
+          onContextMenu={onContextMenu}
           selectedTag={selectedTag}
+          onClearTag={onClearTag}
           unanalyzedCount={unanalyzedCount}
           onSyncNow={onSyncNow}
           unfixedCount={unfixedCount}
           onFixNow={onFixNow}
         />
       )}
-      {selectedNav === "produce" && (
-        <ProduceView produce={produce} seasonal={seasonal} searchQuery={searchQuery} />
-      )}
-      {selectedNav === "recipes" && (
-        <SavedRecipesView
-          recipes={allRecipes}
-          activeRecipeId={activeRecipeId}
-          onSelectRecipe={onSelectRecipe}
-          searchQuery={searchQuery}
-          selectedTag={selectedTag}
-        />
-      )}
-    </div>
+
+      <div className="mt-auto shrink-0 min-[820px]:hidden">
+        <StatusBar status={status} busy={busy} onCancel={onCancel} />
+      </div>
+    </section>
   );
 }

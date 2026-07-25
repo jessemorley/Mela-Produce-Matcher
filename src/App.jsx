@@ -1,10 +1,12 @@
 import { useEffect, useState, useMemo } from "react";
-import { Leaf, Loader2, XCircle } from "lucide-react";
+import { Leaf, Ban, Undo2 } from "lucide-react";
 import Sidebar from "./components/Sidebar.jsx";
 import RecipeList from "./components/RecipeList.jsx";
 import RecipeDetail from "./components/RecipeDetail.jsx";
 import ArticleView from "./components/ArticleView.jsx";
 import FixNowQueue from "./components/FixNowQueue.jsx";
+import { ContextMenu, useContextMenu } from "./components/ContextMenu.jsx";
+import { produceIcon } from "./components/icons.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -18,18 +20,23 @@ export default function App() {
   const [showArticle, setShowArticle] = useState(false);
 
   const [feedTitle, setFeedTitle] = useState("");
-  const [feedLink, setFeedLink] = useState("");
   const [feedHtml, setFeedHtml] = useState("");
   const [produce, setProduce] = useState({ fruit: [], vegetable: [], pick: [], featured: [] });
   const [seasonal, setSeasonal] = useState({ season: "", produce: [] });
   const [recipeCount, setRecipeCount] = useState(0);
 
   const [rankedRecipes, setRankedRecipes] = useState([]); // scored locally by key ingredients
-  const [allRecipes, setAllRecipes] = useState([]); // full local recipes.json, for "Saved Recipes"
-  const [activeRecipeId, setActiveRecipeId] = useState(null);
+  const [allRecipes, setAllRecipes] = useState([]); // full local recipes.json, for "All Recipes"
   const [unanalyzedCount, setUnanalyzedCount] = useState(0);
   const [unfixedCount, setUnfixedCount] = useState(0);
   const [showFixNow, setShowFixNow] = useState(false);
+  const [menu, openMenu, closeMenu] = useContextMenu();
+
+  // ONE selection drives the detail pane, whatever view made it — switching
+  // nav browses, it doesn't select, so the pane holds until you pick something
+  // new. Two independent states (a recipe id + a produce item) meant each view
+  // silently overwrote what the other was showing.
+  const [selection, setSelection] = useState({ kind: "none" }); // 'recipe' | 'produce' | 'none'
 
   // Launch-time sync: fetch cached-or-fresh produce, resync recipes.json from Mela.
   useEffect(() => {
@@ -42,7 +49,6 @@ export default function App() {
     invoke("sync_on_launch")
       .then((result) => {
         setFeedTitle(result.produce.feed_title);
-        setFeedLink(result.produce.feed_link);
         setFeedHtml(result.produce.feed_html);
         setProduce(result.produce);
         setRecipeCount(result.recipe_count);
@@ -69,9 +75,6 @@ export default function App() {
     if (produce.fruit.length || produce.vegetable.length) runMatch();
   }, [produce, allRecipes]);
 
-  // Ranked recipes already carry their full record from the backend, so a
-  // selection only needs the Saved Recipes list as a fallback for recipes
-  // that never matched.
   // Mela's own tags (ZRECIPETAG), already loaded onto every recipe — counts
   // recipes per tag so the sidebar can show them alongside each category.
   const categories = useMemo(() => {
@@ -86,21 +89,35 @@ export default function App() {
       .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   }, [allRecipes]);
 
+  // Ranked recipes already carry their full record from the backend, so a
+  // selection only needs the All Recipes list as a fallback for recipes that
+  // never matched — including one just excluded, which drops out of the
+  // ranked list but stays on screen.
+  const activeRecipeId = selection.kind === "recipe" ? selection.id : null;
   const activeRecipe = useMemo(() => {
-    const id = activeRecipeId ?? rankedRecipes[0]?.id;
-    if (!id) return null;
+    if (!activeRecipeId) return null;
     return (
-      rankedRecipes.find((r) => r.id === id) ||
-      allRecipes.find((r) => r.id === id) ||
+      rankedRecipes.find((r) => r.id === activeRecipeId) ||
+      allRecipes.find((r) => r.id === activeRecipeId) ||
       null
     );
   }, [rankedRecipes, allRecipes, activeRecipeId]);
 
+  const selectedProduce = selection.kind === "produce" ? selection.item : null;
+
+  // The produce tile carries its own matching recipes, but those come from
+  // the ranked list at click time — re-derive against the current one so an
+  // exclusion (or a new week's produce) doesn't leave a stale card up.
+  const produceRecipes = useMemo(() => {
+    if (!selectedProduce) return [];
+    return rankedRecipes.filter((r) =>
+      [...r.pick_matches, ...r.seasonal_matches].some(
+        (m) => m.toLowerCase() === selectedProduce.name.toLowerCase(),
+      ),
+    );
+  }, [rankedRecipes, selectedProduce]);
+
   async function runMatch() {
-    // Only reset the selection if the selected recipe is gone entirely;
-    // a recipe that merely dropped out of the ranked list (excluded, or a
-    // new week's produce) still resolves via the allRecipes fallback.
-    setActiveRecipeId((id) => (allRecipes.some((r) => r.id === id) ? id : null));
     try {
       setRankedRecipes(
         await invoke("match_recipes", {
@@ -169,43 +186,113 @@ export default function App() {
     }
   }
 
-  function cancel() {
-    invoke("cancel");
+  // Excluding drops the recipe out of Best Matches immediately (it can never
+  // match again), but the detail pane keeps showing it via the allRecipes
+  // fallback, so nothing goes blank under the user after a right-click.
+  async function toggleExcluded(recipe) {
+    closeMenu();
+    try {
+      applyRecipes(
+        await invoke("set_excluded", { id: recipe.id, excluded: !recipe.excluded }),
+      );
+    } catch (err) {
+      setStatus(`Error: ${err}`);
+    }
   }
 
-  return (
-    <div className="w-screen h-screen bg-slate-50 flex text-slate-800 font-sans overflow-hidden select-none">
-      <Sidebar
-        selectedNav={selectedNav}
-        onSelectNav={setSelectedNav}
-        matchCount={rankedRecipes.length}
-        produceCount={produce.fruit.length + produce.vegetable.length + seasonal.produce.length}
-        recipeCount={recipeCount}
-        busy={busy}
-        onFullResync={fullResync}
-        categories={categories}
-        selectedTag={selectedTag}
-        onSelectTag={setSelectedTag}
-      />
+  const counts = {
+    matching: rankedRecipes.length,
+    produce: produce.fruit.length + produce.vegetable.length + seasonal.produce.length,
+    recipes: recipeCount,
+  };
 
-      <RecipeList
-        selectedNav={selectedNav}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        selectedTag={selectedTag}
-        produce={produce}
-        seasonal={seasonal}
-        rankedRecipes={rankedRecipes}
-        allRecipes={allRecipes}
-        activeRecipeId={activeRecipe?.id}
-        onSelectRecipe={setActiveRecipeId}
-        unanalyzedCount={unanalyzedCount}
-        onSyncNow={analyzeNew}
-        unfixedCount={unfixedCount}
-        onFixNow={() => setShowFixNow(true)}
-        feedLink={feedLink}
-        onOpenArticle={() => setShowArticle(true)}
-      />
+  return (
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-ground font-sans text-text/72 select-none">
+      <div className="h-8 shrink-0" data-tauri-drag-region />
+
+      {/* One pane gives up width at a time, in priority order — the detail
+          pane absorbs everything first, then the list, then the sidebar:
+            ≥948    detail shrinks alone (it's flex-1); sides at full size
+            880-948 detail floored at 300, list gives up 368 → 300
+            820-880 list floored, sidebar gives up 240 → 180
+            <820    sidebar hidden; detail recovers, then shrinks again
+            630     hard floor — both panes are exactly 300 (tauri minWidth)
+          --rail is the sidebar's contribution to the row (width + one gutter),
+          so the list's clamp() reads one expression in both regimes. */}
+      <style>{`
+        .shell {
+          --sidebar: clamp(180px, calc(100vw - 640px), 240px);
+          --rail: 0px;
+        }
+        @media (min-width: 820px) { .shell { --rail: calc(var(--sidebar) + 10px); } }
+      `}</style>
+
+      <div className="shell flex min-h-0 flex-1 gap-2.5 px-2.5 pb-2.5">
+        <Sidebar
+          selectedNav={selectedNav}
+          onSelectNav={setSelectedNav}
+          counts={counts}
+          busy={busy}
+          status={status}
+          onCancel={() => invoke("cancel")}
+          onFullResync={fullResync}
+          categories={categories}
+          selectedTag={selectedTag}
+          onSelectTag={setSelectedTag}
+        />
+
+        <RecipeList
+          selectedNav={selectedNav}
+          onSelectNav={setSelectedNav}
+          counts={counts}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          selectedTag={selectedTag}
+          onClearTag={() => setSelectedTag(null)}
+          produce={produce}
+          seasonal={seasonal}
+          rankedRecipes={rankedRecipes}
+          allRecipes={allRecipes}
+          activeRecipeId={activeRecipeId}
+          onSelectRecipe={(id) => setSelection({ kind: "recipe", id })}
+          selectedProduce={selectedProduce}
+          onSelectProduce={(item) =>
+            setSelection(item ? { kind: "produce", item } : { kind: "none" })
+          }
+          onContextMenu={openMenu}
+          unanalyzedCount={unanalyzedCount}
+          onSyncNow={analyzeNew}
+          unfixedCount={unfixedCount}
+          onFixNow={() => setShowFixNow(true)}
+          onOpenArticle={() => setShowArticle(true)}
+          status={status}
+          busy={busy}
+          onCancel={() => invoke("cancel")}
+        />
+
+        {/* Keyed on the selection, never on nav — switching tabs leaves the
+            pane exactly as it was. A produce selection renders its recipes as
+            their own surfaces, so the slot drops its pane fill in that case
+            only; otherwise cards would sit on a second background. */}
+        <main
+          className={`min-w-[300px] flex-1 overflow-y-auto ${
+            selectedProduce && !showArticle ? "" : "rounded-2xl bg-pane"
+          }`}
+        >
+          {showArticle ? (
+            <ArticleView title={feedTitle} html={feedHtml} onBack={() => setShowArticle(false)} />
+          ) : selectedProduce ? (
+            <ProducePane item={selectedProduce} recipes={produceRecipes} />
+          ) : activeRecipe ? (
+            <RecipeDetail recipe={activeRecipe} />
+          ) : (
+            <EmptyPane
+              icon={<Leaf className="h-6 w-6 text-text/22" strokeWidth={1.5} />}
+              body="Select a recipe or a piece of produce to see it here."
+            />
+          )}
+        </main>
+      </div>
 
       {showFixNow && (
         <FixNowQueue
@@ -215,41 +302,70 @@ export default function App() {
         />
       )}
 
-      <div className="flex-1 flex flex-col bg-slate-50/50 overflow-hidden relative">
-        <div className="absolute inset-x-0 top-0 h-8 z-10" data-tauri-drag-region />
-        <div className="flex-1 overflow-y-auto">
-          {showArticle ? (
-            <ArticleView
-              title={feedTitle}
-              html={feedHtml}
-              onBack={() => setShowArticle(false)}
-            />
-          ) : activeRecipe ? (
-            <RecipeDetail recipe={activeRecipe} onRecipesChange={applyRecipes} />
-          ) : (
-            <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm gap-2">
-              <Leaf className="w-8 h-8" />
-              <p>Match recipes against this week's produce to get started.</p>
-            </div>
-          )}
-        </div>
+      <ContextMenu
+        menu={menu}
+        items={
+          menu
+            ? [
+                menu.item.excluded
+                  ? { label: "Include", icon: Undo2, onClick: () => toggleExcluded(menu.item) }
+                  : {
+                      label: "Exclude",
+                      icon: Ban,
+                      danger: true,
+                      onClick: () => toggleExcluded(menu.item),
+                    },
+              ]
+            : []
+        }
+      />
+    </div>
+  );
+}
 
-        <div className="h-9 shrink-0 border-t border-slate-200/60 px-4 flex items-center justify-between text-[11px] text-slate-500">
-          <span className="flex items-center gap-2">
-            {busy && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-            {status}
-          </span>
-          {busy && (
-            <button
-              onClick={cancel}
-              className="flex items-center gap-1 text-rose-600 hover:text-rose-700"
-            >
-              <XCircle className="w-3.5 h-3.5" />
-              Cancel
-            </button>
-          )}
-        </div>
+function EmptyPane({ icon, body }) {
+  return (
+    <div className="flex h-full min-h-full flex-col items-center justify-center px-10">
+      {icon}
+      <p className="mt-3 max-w-[22rem] text-center text-[13px] leading-relaxed text-text/35">
+        {body}
+      </p>
+    </div>
+  );
+}
+
+// A produce selection renders its matching recipes as full recipe cards — the
+// same detail body as the pane, stacked. A lone card grows to fill the slot
+// (flex, not min-h-full: a percentage minimum needs a definite parent height).
+function ProducePane({ item, recipes }) {
+  if (recipes.length === 0) {
+    const Icon = produceIcon(item.type);
+    return (
+      <div className="flex min-h-full flex-col items-center justify-center rounded-2xl bg-pane px-10">
+        <Icon
+          className={`h-6 w-6 ${
+            item.tone === "pick" ? "text-pick-dim" : "text-match-dim"
+          }`}
+          strokeWidth={1.5}
+        />
+        <p className="mt-3 max-w-[22rem] text-center text-[13px] leading-relaxed text-text/35">
+          Nothing in your collection uses{" "}
+          <span className="capitalize text-text/60">{item.name}</span> yet.
+        </p>
       </div>
+    );
+  }
+
+  const only = recipes.length === 1;
+  return (
+    <div className="flex min-h-full flex-col gap-2.5">
+      {recipes.map((rec) => (
+        <RecipeDetail
+          key={rec.id}
+          recipe={rec}
+          surfaceClass={`rounded-2xl bg-pane ${only ? "flex flex-1 flex-col" : ""}`}
+        />
+      ))}
     </div>
   );
 }
