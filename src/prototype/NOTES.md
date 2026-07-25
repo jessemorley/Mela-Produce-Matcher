@@ -97,6 +97,37 @@ as much of the generic feel as the accents were.
   so the stacked-card case has one entry point. "Basics" is the only category
   that filters Best Matches to empty.
 
+## Responsive behaviour
+
+One pane gives up width at a time, in priority order — detail first, then the
+list, then the sidebar:
+
+| Width | Moving | Sidebar | List | Detail |
+|---|---|---|---|---|
+| ≥948 | detail | 240 | 368 | shrinking |
+| 948→880 | list | 240 | 368→300 | 300 |
+| 880→820 | sidebar | 240→180 | 300 | 300 |
+| <820 | sidebar hidden | — | 368→300 | ≥300 |
+| 630 | floor | — | 300 | 300 |
+
+The detail pane needs no rule of its own — it's `flex-1`, so it absorbs all
+surplus by default; only a `min-w-[300px]` floor. The two `clamp()`s then take
+over in sequence. `--rail` carries the sidebar's contribution (width + gutter)
+so the list's clamp reads one expression in both regimes.
+
+Below 820px the sidebar is gone, so nav and the status bar re-home to a
+compact strip in the list pane. **Categories become unreachable there** — a
+long list with no room in a strip. An active filter can still be cleared via
+its chip, but not set.
+
+`tauri.conf.json` `minWidth` is 630 — exactly list-min + detail-min + padding
++ gutter. Below that CSS can't hold the floor.
+
+The recipe header uses a **container** query, not a viewport one: the same
+`Detail` body renders as a stacked card inside the In Season pane, where it
+can be narrow while the window is wide. Under 30rem of its own width the
+"Open in Mela" button wraps below the title instead of crushing it.
+
 ## Open question
 
 Excluding a recipe from **Best Matches** should probably drop it out of the

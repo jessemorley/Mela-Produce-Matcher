@@ -103,10 +103,29 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
       style={{ background: p.ground, color: rgba(p.text, 0.72) }}
     >
       <div className="h-8 shrink-0" data-tauri-drag-region />
-      <div className="flex min-h-0 flex-1 gap-2.5 px-2.5 pb-2.5">
+      {/* One pane gives up width at a time, in priority order — the detail
+          pane absorbs everything first, then the list, then the sidebar:
+            ≥948    detail shrinks alone (it's flex-1); sides at full size
+            880-948 detail floored at 300, list gives up 368 → 300
+            820-880 list floored, sidebar gives up 240 → 180
+            <820    sidebar hidden; detail recovers, then shrinks again
+            630     hard floor — both panes are exactly 300
+          --rail is the sidebar's contribution to the row (width + one gutter),
+          so the list's clamp() reads one expression in both regimes. */}
+      <style>{`
+        .shell {
+          --sidebar: clamp(180px, calc(100vw - 640px), 240px);
+          --rail: 0px;
+        }
+        @media (min-width: 820px) { .shell { --rail: calc(var(--sidebar) + 10px); } }
+      `}</style>
+      <div className="shell flex min-h-0 flex-1 gap-2.5 px-2.5 pb-2.5">
         {/* Sidebar sits directly on the window ground — no pane surface — so
             only the list and detail read as floating cards. */}
-        <aside className="flex w-60 shrink-0 flex-col overflow-hidden">
+        <aside
+          className="hidden shrink-0 flex-col overflow-hidden min-[820px]:flex"
+          style={{ width: "var(--sidebar)" }}
+        >
           {/* src-tauri/icons/ still holds the default Tauri placeholder (cyan
               and yellow), which fights the palette — so the mark is drawn here
               in the app's own accents until a real icon exists. */}
@@ -182,7 +201,37 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
         {/* Slot 2 is always the browse list, slot 3 always the detail — the
             panes never change job or count between nav items. In Season fills
             them with produce/its recipes rather than growing a new pane. */}
-        <section className={`flex w-[23rem] shrink-0 flex-col overflow-hidden ${pane}`} style={paneStyle}>
+        {/* Fluid, not stepped: the list gives up width continuously as the
+            window narrows, so the detail pane holds at 300px the whole way
+            down instead of the two panes trading a jump at each breakpoint.
+            clamp() floors it at 250 and caps it at 368; the middle term is
+            what's left once the sidebar, gutters and a 300px detail pane are
+            accounted for. */}
+        <section
+          className={`flex shrink-0 flex-col overflow-hidden ${pane}`}
+          style={{ ...paneStyle, width: "clamp(300px, calc(100vw - var(--rail) - 340px), 23rem)" }}
+        >
+          {/* Below 820px the sidebar is gone, so nav + status have to live
+              somewhere: a compact strip at the top of the list pane. */}
+          <div className="min-[820px]:hidden">
+            <div className="flex gap-1 px-2.5 pt-2.5">
+              {NAV.map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  onClick={() => setNav(key)}
+                  title={label}
+                  className="flex flex-1 items-center justify-center gap-1.5 rounded-lg py-1.5 text-[11px] transition-colors hover:bg-white/[0.035]"
+                  style={{
+                    background: nav === key ? rgba(p.text, 0.07) : undefined,
+                    color: rgba(p.text, nav === key ? 0.9 : 0.4),
+                  }}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  <span className="tabular-nums">{counts[key]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           {nav === "produce" ? (
             <ProduceLayout
               produce={produce}
@@ -271,6 +320,10 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
           </div>
           </>
           )}
+
+          <div className="mt-auto shrink-0 min-[820px]:hidden">
+            <StatusBar status={run.status} busy={run.busy} onCancel={() => cancelRef.current?.()} p={p} />
+          </div>
         </section>
 
         {/* Keyed on the selection, never on nav — switching tabs leaves the
@@ -278,7 +331,7 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
             their own surfaces, so the slot drops its pane fill in that case
             only; otherwise cards would sit on a second background. */}
         <main
-          className={`min-w-0 flex-1 overflow-y-auto ${activeProduce ? "" : pane}`}
+          className={`min-w-[300px] flex-1 overflow-y-auto ${activeProduce ? "" : pane}`}
           style={activeProduce ? undefined : paneStyle}
         >
           {showArticle ? (

@@ -38,9 +38,13 @@ export function Detail({ rec, surfaceClass = "", surfaceStyle, palette: p }) {
         </div>
       )}
 
-      <div className={`px-10 ${rec.image ? "-mt-14 relative" : "pt-9"}`}>
-      <div className="flex items-start justify-between gap-8">
-        <div className="min-w-0">
+      <div className={`@container px-10 ${rec.image ? "-mt-14 relative" : "pt-9"}`}>
+      {/* Container query, not viewport: this same body also renders as a
+          stacked card inside the In Season pane, so it has to react to its own
+          width. Below 30rem the button wraps onto its own line rather than
+          squeezing the title into two-word lines. */}
+      <div className="flex flex-col items-start gap-4 @[30rem]:flex-row @[30rem]:items-start @[30rem]:justify-between @[30rem]:gap-8">
+        <div className="min-w-0 @[30rem]:flex-1">
           {/* Whole line takes the figure's old style — 13px, medium, normal
               tracking, title case — so only colour separates the two. */}
           {typeof rec.rating === "number" && (

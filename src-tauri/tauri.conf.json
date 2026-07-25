@@ -16,7 +16,7 @@
         "title": "Seasonal Recipes",
         "width": 1280,
         "height": 800,
-        "minWidth": 640,
+        "minWidth": 630,
         "minHeight": 480,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true
