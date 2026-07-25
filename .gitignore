@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local build tuning (incremental=false to keep target/debug small) — a
+# per-machine tradeoff, not project config.
+/src-tauri/.cargo/
+
+# An unused icon set and a scratch component, both kept on disk but out of
+# the repo. Nothing imports either.
+/svg/
+/text-*.jsx
