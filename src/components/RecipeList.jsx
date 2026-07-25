@@ -4,6 +4,7 @@ import { produceIcon, VEGETABLE } from "./icons.js";
 import { FilterChip, ListEmpty } from "./ListStates.jsx";
 import StatusBar from "./StatusBar.jsx";
 import { imageSrc } from "../imageSrc.js";
+import { recipesUsing } from "../produceMatches.js";
 
 // Header of every list view — same slot, same chrome, so switching nav never
 // moves the pane's furniture.
@@ -168,12 +169,6 @@ function splitProduce(produce, seasonal) {
 function hasName(list, name) {
   const n = name.trim().toLowerCase();
   return (list || []).some((p) => p.trim().toLowerCase() === n);
-}
-
-function recipesUsing(rankedRecipes, name) {
-  return rankedRecipes.filter((r) =>
-    [...r.pick_matches, ...r.seasonal_matches].some((m) => m.toLowerCase() === name.toLowerCase()),
-  );
 }
 
 // Two layers: Dave's Picks come from the live market update; seasonal produce
