@@ -46,23 +46,44 @@ as much of the generic feel as the accents were.
   the same `Detail` body as the detail pane, stacked. A lone card grows to fill
   the slot (flex, not `min-h-full`: a percentage minimum needs a definite
   parent height).
-- **Produce icons key on type** (Fruit/Vegetable/seasonal), never on name — the
-  same reason `TYPE_STYLE` does in the real `RecipeList`: feed names come from
-  Claude reading a live newsletter and drift.
+- **Exactly three ingredient icons** (`icons.js`): apple = fruit, sprout =
+  vegetable, wheat = pantry. Keyed on type, never on name — the same reason
+  `TYPE_STYLE` does in the real `RecipeList`: feed names come from Claude
+  reading a live newsletter and drift out of date.
 - **No coloured status dots.** Icons and text colour carry state instead.
+- **Lists are transparent at rest, filled only when selected** (`0.07`). Both
+  the recipe rows and the In Season tiles use that one rule, so "selected"
+  looks the same everywhere; other states (nothing-uses-this) are carried by
+  text and icon dimming rather than a second background shade.
+- **The banner scrim is doing real work**, not decoration. Mela's photos are
+  bright, high-key and shot on white; without the gradient to pane colour the
+  image ends in a hard bright line and the title below has no footing.
+- **Exclude moved to a right-click menu on list rows** — rare housekeeping,
+  so it shouldn't sit beside the one button people came for ("Open in Mela").
+  The menu dismisses on click-anywhere/Escape/scroll/resize and clamps to the
+  viewport.
+- **The Fix queue's suggestion list is the point of that screen.** Naming an
+  ingredient "walnut" when the collection already says "walnut halves"
+  silently splits one ingredient into two, so every existing canonical name is
+  ranked by fuzzy closeness (Dice coefficient over bigrams, in `rankNames`),
+  seeded from the raw line before anything is typed, and a genuinely new name
+  is flagged. Picking an existing name carries its produce/pantry flag across.
 
 ## Known gaps (deliberate)
 
-- No thumbnails — real `rec.image` is a base64 data URI from Mela; fixtures set
-  `image: null`.
-- Only Best Matches and In Season render. Search, All Recipes, the Article
-  view, and the Fix Now queue aren't built; nav is wired but inert.
-- No `full_resync` / `set_excluded` / `open_recipe` wiring — buttons are inert.
+- All Recipes, Fix, and ArticleView are built; the sidebar's Categories list
+  and the "Sync" banner action are still inert.
+- No backend wiring at all — `set_excluded` is local state, `save` in the Fix
+  queue just advances the queue.
 - Fixture coverage: only "leek" has 2 matching recipes; everything else has 1,
   so the stacked-card case has one entry point.
 
-## Next
+## Notes from reading the real Mela database
 
-Fold A2 into `src/components/`, delete `src/prototype/` and `prototype.html`,
-and fix the "Dark mode only" line in CLAUDE.md — it currently describes an
-intent the light-themed components never matched.
+Worth knowing before the port — both found while pulling real thumbnails:
+
+- **`ZRECIPEIMAGEOBJECT.ZDATA` has a 1-byte prefix before the JPEG magic**
+  (`01 ff d8 ff`). It has to be stripped or the blob isn't a valid image.
+- **150 of 215 image rows are not images.** They're 38-byte UUID references to
+  files stored outside the database; only 65 recipes have inline data. The
+  no-image fallback is a common path, not an edge case.

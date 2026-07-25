@@ -6,10 +6,13 @@
 // Colour comes entirely from palettes.js — two accents (match / pick) plus a
 // separate alert, so nothing borrows a meaning it doesn't own.
 import { useState } from "react";
-import { Leaf, Sparkles, BookOpen, Tag } from "lucide-react";
+import { Leaf, Sparkles, BookOpen, Tag, Ban, Undo2 } from "lucide-react";
 import { PRODUCE_LAYOUTS, ProduceDetail } from "./produceLayouts.jsx";
 import { Detail } from "./RecipeDetailBody.jsx";
 import { PALETTE, rgba } from "./palettes.js";
+import { VEGETABLE } from "./icons.js";
+import { AllRecipesList, FixView, ArticleView } from "./remainingViews.jsx";
+import { ContextMenu, useContextMenu } from "./ContextMenu.jsx";
 
 export const name = "Ledger, inset — floating panes, warm ground";
 
@@ -30,6 +33,22 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
   // Two independent states (a recipe id + a produce item) meant each view
   // silently overwrote what the other was showing.
   const [selection, setSelection] = useState({ kind: "recipe", id: rankedRecipes[0]?.id });
+  const [query, setQuery] = useState("");
+  const [showFix, setShowFix] = useState(false);
+  const [showArticle, setShowArticle] = useState(false);
+  const [menu, openMenu, closeMenu] = useContextMenu();
+
+  // Prototype: no backend, so exclusion is local state keyed by recipe id.
+  const [excluded, setExcluded] = useState(() => new Set(allRecipes.filter((r) => r.excluded).map((r) => r.id)));
+  const isExcluded = (id) => excluded.has(id);
+  function toggleExcluded(id) {
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+    closeMenu();
+  }
 
   const activeId = selection.kind === "recipe" ? selection.id : null;
   const activeRecipe =
@@ -51,9 +70,20 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
         {/* Sidebar sits directly on the window ground — no pane surface — so
             only the list and detail read as floating cards. */}
         <aside className="flex w-60 shrink-0 flex-col overflow-hidden">
-          <div className="px-5 pb-6 pt-5">
-            <h1 className="text-sm font-semibold tracking-tight" style={{ color: p.text }}>Sprout</h1>
-            <p className="mt-0.5 text-[11px]" style={{ color: rgba(p.text, 0.4) }}>Seasonal matcher</p>
+          {/* src-tauri/icons/ still holds the default Tauri placeholder (cyan
+              and yellow), which fights the palette — so the mark is drawn here
+              in the app's own accents until a real icon exists. */}
+          <div className="flex items-center gap-2.5 px-5 pb-6 pt-5">
+            <span
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+              style={{ background: rgba(p.match, 0.14) }}
+            >
+              <VEGETABLE className="h-[18px] w-[18px]" style={{ color: p.match }} strokeWidth={1.75} />
+            </span>
+            <div className="min-w-0">
+              <h1 className="text-sm font-semibold tracking-tight" style={{ color: p.text }}>Sprout</h1>
+              <p className="mt-0.5 text-[11px]" style={{ color: rgba(p.text, 0.4) }}>Seasonal matcher</p>
+            </div>
           </div>
           <nav className="px-2.5">
             {NAV.map(({ key, label, icon: Icon }) => (
@@ -102,7 +132,19 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
               rankedRecipes={rankedRecipes}
               selected={activeProduce}
               onSelect={(item) => setSelection(item ? { kind: "produce", item } : { kind: "none" })}
+              onOpenArticle={() => setShowArticle(true)}
               palette={p}
+            />
+          ) : nav === "recipes" ? (
+            <AllRecipesList
+              recipes={allRecipes}
+              onContextMenu={openMenu}
+              isExcluded={isExcluded}
+              activeId={activeId}
+              onSelect={(id) => setSelection({ kind: "recipe", id })}
+              query={query}
+              onQuery={setQuery}
+              p={p}
             />
           ) : (
           <>
@@ -124,6 +166,7 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
               {unfixedCount > 0 && (
                 <button
                   className="flex w-full items-center justify-between rounded-xl px-3.5 py-2 text-left transition-colors"
+                  onClick={() => setShowFix(true)}
                   style={{ background: rgba(p.alert, 0.12) }}
                 >
                   <span className="text-[11.5px]" style={{ color: p.alertSoft }}>{unfixedCount} not found</span>
@@ -133,12 +176,15 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
             </div>
           )}
           <div className="flex-1 overflow-y-auto px-3 pb-3">
-            {rankedRecipes.map((rec) => {
+            {rankedRecipes
+              .filter((r) => r.title.toLowerCase().includes(query.toLowerCase()))
+              .map((rec) => {
               const on = activeId === rec.id;
               return (
                 <button
                   key={rec.id}
                   onClick={() => setSelection({ kind: "recipe", id: rec.id })}
+                  onContextMenu={openMenu(rec)}
                   className="mb-1 flex w-full items-start gap-3.5 rounded-xl px-3.5 py-3 text-left transition-colors hover:bg-white/[0.035]"
                   style={{ background: on ? rgba(p.text, 0.07) : undefined }}
                 >
@@ -170,7 +216,14 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
           className={`min-w-0 flex-1 overflow-y-auto ${activeProduce ? "" : pane}`}
           style={activeProduce ? undefined : paneStyle}
         >
-          {activeProduce ? (
+          {showArticle ? (
+            <ArticleView
+              title={data.feedTitle}
+              html={data.feedHtml}
+              onBack={() => setShowArticle(false)}
+              p={p}
+            />
+          ) : activeProduce ? (
             <ProduceDetail item={activeProduce} paneClass={pane} paneStyle={paneStyle} palette={p} />
           ) : activeRecipe ? (
             <Detail rec={activeRecipe} palette={p} />
@@ -184,6 +237,22 @@ export default function VariantA2({ data, nav, setNav, produceLayout = "1" }) {
           )}
         </main>
       </div>
+
+      {showFix && <FixView recipes={allRecipes} onClose={() => setShowFix(false)} p={p} />}
+
+      <ContextMenu
+        menu={menu}
+        p={p}
+        items={
+          menu
+            ? [
+                isExcluded(menu.item.id)
+                  ? { label: "Include", icon: Undo2, onClick: () => toggleExcluded(menu.item.id) }
+                  : { label: "Exclude", icon: Ban, danger: true, onClick: () => toggleExcluded(menu.item.id) },
+              ]
+            : []
+        }
+      />
     </div>
   );
 }

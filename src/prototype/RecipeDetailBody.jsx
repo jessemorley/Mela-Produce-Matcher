@@ -1,8 +1,9 @@
 // PROTOTYPE — the recipe detail body, shared by the Best Matches detail
 // pane and the In Season stack. Its own file so VariantA2 and produceLayouts
 // don't have to import from each other (a cycle).
-import { ExternalLink, Ban, Clock, Heart, Sprout } from "lucide-react";
+import { ExternalLink, Ban, Clock, Heart } from "lucide-react";
 import { rgba } from "./palettes.js";
+import { ingredientIcon } from "./icons.js";
 
 // `surfaceClass` makes the body its own standalone pane — used by the In
 // Season stack, where each recipe *is* a pane rather than sitting inside one.
@@ -13,8 +14,31 @@ export function Detail({ rec, surfaceClass = "", surfaceStyle, palette: p }) {
   const pantry = (rec.ingredients || []).filter((i) => i.pantry);
   const hit = (n) => rec.pick_matches?.includes(n) || rec.seasonal_matches?.includes(n);
 
+  // key_ingredients is a bare name list, so the pantry flag has to come from
+  // the matching ingredient row. Unanalysed lines have no name and no flag —
+  // those fall through to produce, which is the commoner case.
+  const isPantry = (n) =>
+    (rec.ingredients || []).find((i) => i.name && i.name.toLowerCase() === n.toLowerCase())?.pantry ?? false;
+
   return (
-    <div className={`px-10 pb-16 pt-9 ${surfaceClass}`} style={surfaceStyle}>
+    <div className={`overflow-hidden pb-16 ${surfaceClass}`} style={surfaceStyle}>
+      {/* Full-bleed banner. Mela's photos are bright, high-key and shot on
+          white, so a scrim is doing real work here: without it the image ends
+          in a hard bright line against the near-black pane, and the title
+          below it loses its footing. */}
+      {rec.image && (
+        <div className="relative h-52 w-full overflow-hidden">
+          <img src={rec.image} alt="" className="h-full w-full object-cover" />
+          <div
+            className="absolute inset-0"
+            style={{
+              background: `linear-gradient(to bottom, ${rgba(p.pane, 0.1)} 0%, ${rgba(p.pane, 0.55)} 55%, ${p.pane} 100%)`,
+            }}
+          />
+        </div>
+      )}
+
+      <div className={`px-10 ${rec.image ? "-mt-14 relative" : "pt-9"}`}>
       <div className="flex items-start justify-between gap-8">
         <div className="min-w-0">
           {/* Whole line takes the figure's old style — 13px, medium, normal
@@ -24,7 +48,7 @@ export function Detail({ rec, surfaceClass = "", surfaceStyle, palette: p }) {
               <span className="tabular-nums" style={{ color: p.match }}>{Math.round(rec.rating * 100)}</span> Match
             </p>
           )}
-          <h2 className="max-w-lg text-[27px] font-semibold leading-[1.18] tracking-tight" style={{ color: p.text }}>
+          <h2 className="text-[27px] font-semibold leading-[1.18] tracking-tight" style={{ color: p.text }}>
             {rec.title}
           </h2>
           <div className="mt-4 flex items-center gap-4 text-[12px]" style={{ color: rgba(p.text, 0.4) }}>
@@ -33,50 +57,60 @@ export function Detail({ rec, surfaceClass = "", surfaceStyle, palette: p }) {
             {rec.favorite && <Heart className="h-3.5 w-3.5" style={{ fill: p.pick, color: p.pick }} />}
           </div>
         </div>
+        {/* Exclude lives on the list row's context menu now — it's a rare,
+            per-recipe housekeeping action, not something to sit beside the
+            one button people actually came here to press. */}
         <div className="flex shrink-0 gap-2">
-          <button className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] hover:brightness-125" style={{ background: rgba(p.text, 0.07), color: rgba(p.text, 0.6) }}>
-            <Ban className="h-3.5 w-3.5" /> Exclude
-          </button>
           <button className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[12px] font-medium hover:brightness-110" style={{ background: p.text, color: p.ground }}>
             Open in Mela <ExternalLink className="h-3.5 w-3.5" />
           </button>
         </div>
       </div>
 
-      {/* A2 idiom: content sits on a filled surface, not bare on the pane, and
-          a matched key ingredient carries a filled accent chip — the icon
-          alone read as decoration rather than a state. */}
+      {/* Every chip carries an icon — produce or pantry — so the icon reads as
+          "what kind of thing this is", and the fill alone carries "in season".
+          Previously the icon appeared only on a match, which conflated the
+          two and made it look like decoration. */}
       {rec.key_ingredients?.length > 0 && (
         <div className="mt-8">
           <p className="mb-3 text-[9.5px] uppercase tracking-[0.18em]" style={{ color: rgba(p.text, 0.32) }}>Built around</p>
           <div className="flex flex-wrap gap-1.5">
-            {rec.key_ingredients.map((k) => (
-              <span
-                key={k}
-                className="flex items-center gap-2 rounded-xl px-3 py-1.5 text-[13px] capitalize"
-                style={
-                  hit(k)
-                    ? { background: rgba(p.matchWash, 0.12), color: p.matchSoft }
-                    : { background: rgba(p.text, 0.05), color: rgba(p.text, 0.55) }
-                }
-              >
-                {hit(k) && <Sprout className="h-3.5 w-3.5 shrink-0" style={{ color: p.match }} strokeWidth={1.75} />}
-                {k}
-              </span>
-            ))}
+            {rec.key_ingredients.map((k) => {
+              const on = hit(k);
+              const Icon = ingredientIcon(isPantry(k));
+              return (
+                <span
+                  key={k}
+                  className="flex items-center gap-2 rounded-xl px-3 py-1.5 text-[13px] capitalize"
+                  style={
+                    on
+                      ? { background: rgba(p.matchWash, 0.12), color: p.matchSoft }
+                      : { background: rgba(p.text, 0.05), color: rgba(p.text, 0.55) }
+                  }
+                >
+                  <Icon
+                    className="h-3.5 w-3.5 shrink-0"
+                    style={{ color: on ? p.match : rgba(p.text, 0.35) }}
+                    strokeWidth={1.75}
+                  />
+                  {k}
+                </span>
+              );
+            })}
           </div>
         </div>
       )}
 
       {rec.description && (
-        <p className="mt-8 max-w-2xl whitespace-pre-wrap text-[13.5px] leading-[1.75]" style={{ color: rgba(p.text, 0.6) }}>
+        <p className="mt-8 whitespace-pre-wrap text-[13.5px] leading-[1.75]" style={{ color: rgba(p.text, 0.6) }}>
           {rec.description}
         </p>
       )}
 
-      <div className="mt-10 grid max-w-2xl grid-cols-2 gap-x-10 gap-y-2">
+      <div className="mt-10 grid grid-cols-2 gap-x-10 gap-y-2">
         <Col title="Produce" rows={produce} hit={hit} p={p} />
         <Col title="Pantry" rows={pantry} hit={() => false} p={p} />
+      </div>
       </div>
     </div>
   );

@@ -8,16 +8,13 @@
 // Tiles are sorted by how many of your recipes use the item — the one fact
 // the old list never showed.
 import { useEffect } from "react";
-import { Newspaper, Star, Apple, Carrot, Sprout } from "lucide-react";
+import { Newspaper, Star } from "lucide-react";
 import { Detail } from "./RecipeDetailBody.jsx";
 import { rgba } from "./palettes.js";
+import { produceIcon, VEGETABLE } from "./icons.js";
 
-// Produce names come from Claude reading a live newsletter, so a fixed
-// name→icon table would drift out of date (the same reason TYPE_STYLE in the
-// real RecipeList keys on type). Key on what's actually known instead:
-// Fruit/Vegetable for market items, a generic sprout for the seasonal table.
-const TYPE_ICON = { Fruit: Apple, Vegetable: Carrot };
-const iconFor = (type) => TYPE_ICON[type] || Sprout;
+// Three icons total, shared with the recipe views — see icons.js.
+const iconFor = produceIcon;
 
 export function splitProduce(produce, seasonal) {
   const market = [
@@ -37,7 +34,7 @@ function recipesUsing(rankedRecipes, name) {
 
 // Selection lives in the shell (VariantA2) because the recipe panel is a
 // sibling pane, not a child of this one.
-function TileGrid({ produce, seasonal, rankedRecipes, selected, onSelect, palette: p }) {
+function TileGrid({ produce, seasonal, rankedRecipes, selected, onSelect, onOpenArticle, palette: p }) {
   const { market, seasonalOnly } = splitProduce(produce, seasonal);
   const sel = selected;
   const setSel = onSelect;
@@ -61,6 +58,9 @@ function TileGrid({ produce, seasonal, rankedRecipes, selected, onSelect, palett
   const marketTiles = market.map((m) => decorate(m.name, "pick", m.type)).sort(byUse);
   const seasonTiles = seasonalOnly.map((n) => decorate(n, "seasonal")).sort(byUse);
 
+  // Same idiom as the recipe rows: transparent at rest, filled only when
+  // selected. "Nothing uses this" is carried by dimmed text and icon rather
+  // than a third background shade.
   const Tile = ({ item }) => {
     const on = sel?.name === item.name;
     const Icon = iconFor(item.type);
@@ -68,8 +68,8 @@ function TileGrid({ produce, seasonal, rankedRecipes, selected, onSelect, palett
     return (
       <button
         onClick={() => setSel(on ? null : item)}
-        className="flex w-full min-w-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors hover:brightness-125"
-        style={{ background: rgba(p.text, on ? 0.14 : cookable ? 0.04 : 0.015) }}
+        className="flex w-full min-w-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-white/[0.035]"
+        style={{ background: on ? rgba(p.text, 0.07) : undefined }}
       >
         <Icon
           className="h-4 w-4 shrink-0"
@@ -82,12 +82,12 @@ function TileGrid({ produce, seasonal, rankedRecipes, selected, onSelect, palett
         />
         <span
           className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] capitalize"
-          style={{ color: rgba(p.text, cookable ? 0.8 : 0.4) }}
+          style={{ color: rgba(p.text, on ? 0.95 : cookable ? 0.7 : 0.35) }}
         >
           <span className="truncate">{item.name}</span>
           {item.starred && <Star className="h-3 w-3 shrink-0" style={{ fill: p.pick, color: p.pick }} />}
         </span>
-        <span className="shrink-0 text-[10.5px] tabular-nums" style={{ color: rgba(p.text, cookable ? 0.4 : 0.22) }}>
+        <span className="shrink-0 text-[10.5px] tabular-nums" style={{ color: rgba(p.text, cookable ? 0.4 : 0.2) }}>
           {cookable ? item.uses.length : "—"}
         </span>
       </button>
@@ -104,6 +104,7 @@ function TileGrid({ produce, seasonal, rankedRecipes, selected, onSelect, palett
 
       <div className="mx-3 mb-3">
         <button
+          onClick={onOpenArticle}
           className="flex w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-left hover:brightness-125"
           style={{ background: rgba(p.text, 0.05) }}
         >
@@ -144,7 +145,7 @@ export function ProduceDetail({ item, paneClass = "", paneStyle, palette: p }) {
 
   if (!item) {
     return empty(
-      <Sprout className="h-6 w-6" style={{ color: rgba(p.text, 0.22) }} strokeWidth={1.5} />,
+      <VEGETABLE className="h-6 w-6" style={{ color: rgba(p.text, 0.22) }} strokeWidth={1.5} />,
       "Select produce to see which of your recipes use it.",
     );
   }
@@ -179,7 +180,7 @@ export function ProduceDetail({ item, paneClass = "", paneStyle, palette: p }) {
         <Detail
           key={rec.id}
           rec={rec}
-          surfaceClass={`${paneClass} ${only ? "flex-1" : ""}`}
+          surfaceClass={`${paneClass} ${only ? "flex flex-1 flex-col" : ""}`}
           surfaceStyle={paneStyle}
           palette={p}
         />
