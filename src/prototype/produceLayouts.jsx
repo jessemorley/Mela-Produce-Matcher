@@ -10,6 +10,7 @@
 import { useEffect } from "react";
 import { Newspaper, Star, Apple, Carrot, Sprout } from "lucide-react";
 import { Detail } from "./RecipeDetailBody.jsx";
+import { rgba } from "./palettes.js";
 
 // Produce names come from Claude reading a live newsletter, so a fixed
 // name→icon table would drift out of date (the same reason TYPE_STYLE in the
@@ -36,7 +37,7 @@ function recipesUsing(rankedRecipes, name) {
 
 // Selection lives in the shell (VariantA2) because the recipe panel is a
 // sibling pane, not a child of this one.
-function TileGrid({ produce, seasonal, rankedRecipes, selected, onSelect }) {
+function TileGrid({ produce, seasonal, rankedRecipes, selected, onSelect, palette: p }) {
   const { market, seasonalOnly } = splitProduce(produce, seasonal);
   const sel = selected;
   const setSel = onSelect;
@@ -67,27 +68,26 @@ function TileGrid({ produce, seasonal, rankedRecipes, selected, onSelect }) {
     return (
       <button
         onClick={() => setSel(on ? null : item)}
-        className={`flex w-full min-w-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors ${
-          on
-            ? "bg-white/[0.11] ring-1 ring-white/[0.14]"
-            : cookable
-              ? "bg-white/[0.04] hover:bg-white/[0.08]"
-              : "bg-white/[0.015] hover:bg-white/[0.05]"
-        }`}
+        className="flex w-full min-w-0 items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors hover:brightness-125"
+        style={{ background: rgba(p.text, on ? 0.14 : cookable ? 0.04 : 0.015) }}
       >
         <Icon
-          className={`h-4 w-4 shrink-0 ${
-            item.tone === "pick"
-              ? cookable ? "text-amber-400/90" : "text-amber-400/40"
-              : cookable ? "text-emerald-400/90" : "text-emerald-400/40"
-          }`}
+          className="h-4 w-4 shrink-0"
+          style={{
+            color: item.tone === "pick"
+              ? (cookable ? p.pick : p.pickDim)
+              : (cookable ? p.match : p.matchDim),
+          }}
           strokeWidth={1.75}
         />
-        <span className={`flex min-w-0 flex-1 items-center gap-1.5 text-[13px] capitalize ${cookable ? "text-neutral-200" : "text-neutral-500"}`}>
+        <span
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-[13px] capitalize"
+          style={{ color: rgba(p.text, cookable ? 0.8 : 0.4) }}
+        >
           <span className="truncate">{item.name}</span>
-          {item.starred && <Star className="h-3 w-3 shrink-0 fill-amber-400 text-amber-400" />}
+          {item.starred && <Star className="h-3 w-3 shrink-0" style={{ fill: p.pick, color: p.pick }} />}
         </span>
-        <span className={`shrink-0 text-[10.5px] tabular-nums ${cookable ? "text-neutral-500" : "text-neutral-700"}`}>
+        <span className="shrink-0 text-[10.5px] tabular-nums" style={{ color: rgba(p.text, cookable ? 0.4 : 0.22) }}>
           {cookable ? item.uses.length : "—"}
         </span>
       </button>
@@ -98,24 +98,27 @@ function TileGrid({ produce, seasonal, rankedRecipes, selected, onSelect }) {
   return (
     <>
       <div className="flex items-baseline justify-between px-5 pb-4 pt-5">
-        <h2 className="text-[12.5px] font-medium text-neutral-300">In Season</h2>
-        <span className="text-[10.5px] tabular-nums text-neutral-600">{market.length + seasonalOnly.length}</span>
+        <h2 className="text-[12.5px] font-medium" style={{ color: rgba(p.text, 0.7) }}>In Season</h2>
+        <span className="text-[10.5px] tabular-nums" style={{ color: rgba(p.text, 0.3) }}>{market.length + seasonalOnly.length}</span>
       </div>
 
       <div className="mx-3 mb-3">
-        <button className="flex w-full items-center gap-2.5 rounded-xl bg-white/[0.05] px-3.5 py-2.5 text-left hover:bg-white/[0.09]">
-          <Newspaper className="h-3.5 w-3.5 shrink-0 text-neutral-500" strokeWidth={1.75} />
-          <span className="min-w-0 flex-1 truncate text-[11.5px] text-neutral-400">Read the market update</span>
+        <button
+          className="flex w-full items-center gap-2.5 rounded-xl px-3.5 py-2.5 text-left hover:brightness-125"
+          style={{ background: rgba(p.text, 0.05) }}
+        >
+          <Newspaper className="h-3.5 w-3.5 shrink-0" style={{ color: rgba(p.text, 0.4) }} strokeWidth={1.75} />
+          <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: rgba(p.text, 0.55) }}>Read the market update</span>
         </button>
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 pb-3">
-        <p className="px-2 pb-2 text-[9.5px] uppercase tracking-[0.18em] text-amber-500/70">Dave's Picks</p>
+        <p className="px-2 pb-2 text-[9.5px] uppercase tracking-[0.18em]" style={{ color: p.pick }}>Dave's Picks</p>
         <div className="space-y-1">
           {marketTiles.map((item) => <Tile key={item.name} item={item} />)}
         </div>
 
-        <p className="px-2 pb-2 pt-6 text-[9.5px] uppercase tracking-[0.18em] text-emerald-500/70">
+        <p className="px-2 pb-2 pt-6 text-[9.5px] uppercase tracking-[0.18em]" style={{ color: p.match }}>
           Also in {seasonal.season.toLowerCase()}
         </p>
         <div className="space-y-1">
@@ -131,17 +134,17 @@ function TileGrid({ produce, seasonal, rankedRecipes, selected, onSelect }) {
 // are the only surfaces — the slot itself is bare, so nothing sits on a second
 // background. The empty states have no cards, so they take the pane fill
 // themselves via `paneClass`.
-export function ProduceDetail({ item, paneClass = "" }) {
+export function ProduceDetail({ item, paneClass = "", paneStyle, palette: p }) {
   const empty = (icon, body) => (
-    <div className={`flex min-h-full flex-col items-center justify-center px-10 ${paneClass}`}>
+    <div className={`flex min-h-full flex-col items-center justify-center px-10 ${paneClass}`} style={paneStyle}>
       {icon}
-      <p className="mt-3 max-w-[22rem] text-center text-[13px] leading-relaxed text-neutral-600">{body}</p>
+      <p className="mt-3 max-w-[22rem] text-center text-[13px] leading-relaxed" style={{ color: rgba(p.text, 0.35) }}>{body}</p>
     </div>
   );
 
   if (!item) {
     return empty(
-      <Sprout className="h-6 w-6 text-neutral-700" strokeWidth={1.5} />,
+      <Sprout className="h-6 w-6" style={{ color: rgba(p.text, 0.22) }} strokeWidth={1.5} />,
       "Select produce to see which of your recipes use it.",
     );
   }
@@ -150,12 +153,13 @@ export function ProduceDetail({ item, paneClass = "" }) {
     const EmptyIcon = iconFor(item.type);
     return empty(
       <EmptyIcon
-        className={`h-6 w-6 ${item.tone === "pick" ? "text-amber-400/50" : "text-emerald-400/50"}`}
+        className="h-6 w-6"
+        style={{ color: item.tone === "pick" ? p.pickDim : p.matchDim }}
         strokeWidth={1.5}
       />,
       <>
         Nothing in your collection uses{" "}
-        <span className="capitalize text-neutral-400">{item.name}</span> yet.
+        <span className="capitalize" style={{ color: rgba(p.text, 0.6) }}>{item.name}</span> yet.
       </>,
     );
   }
@@ -172,7 +176,13 @@ export function ProduceDetail({ item, paneClass = "" }) {
   return (
     <div className="flex min-h-full flex-col gap-2.5">
       {item.uses.map((rec) => (
-        <Detail key={rec.id} rec={rec} surfaceClass={`${paneClass} ${only ? "flex-1" : ""}`} />
+        <Detail
+          key={rec.id}
+          rec={rec}
+          surfaceClass={`${paneClass} ${only ? "flex-1" : ""}`}
+          surfaceStyle={paneStyle}
+          palette={p}
+        />
       ))}
     </div>
   );
