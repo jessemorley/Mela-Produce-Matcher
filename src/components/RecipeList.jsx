@@ -3,6 +3,7 @@ import { NAV } from "./nav.js";
 import { produceIcon, VEGETABLE } from "./icons.js";
 import { FilterChip, ListEmpty } from "./ListStates.jsx";
 import StatusBar from "./StatusBar.jsx";
+import { imageSrc } from "../imageSrc.js";
 
 // Header of every list view — same slot, same chrome, so switching nav never
 // moves the pane's furniture.
@@ -164,6 +165,11 @@ function splitProduce(produce, seasonal) {
   return { market, seasonalOnly };
 }
 
+function hasName(list, name) {
+  const n = name.trim().toLowerCase();
+  return (list || []).some((p) => p.trim().toLowerCase() === n);
+}
+
 function recipesUsing(rankedRecipes, name) {
   return rankedRecipes.filter((r) =>
     [...r.pick_matches, ...r.seasonal_matches].some((m) => m.toLowerCase() === name.toLowerCase()),
@@ -177,11 +183,18 @@ function recipesUsing(rankedRecipes, name) {
 function ProduceView({ produce, seasonal, rankedRecipes, selectedProduce, onSelectProduce, onOpenArticle }) {
   const { market, seasonalOnly } = splitProduce(produce, seasonal);
 
+  // Same three-tier star as the ingredient list in RecipeDetail: gold for the
+  // newsletter's pick of the week, filled for a featured item, outline for
+  // the rest of the market update. Seasonal-table tiles get none — the
+  // section heading already says which layer they're in.
   const decorate = (name, tone, type) => ({
     name,
     tone,
     type,
-    starred: produce.pick.includes(name),
+    // Case-insensitive: the feed capitalises inconsistently ("Brussel
+    // sprout"), and an exact compare drops the star with no visible error.
+    pickOfWeek: hasName(produce.pick, name),
+    featured: hasName(produce.featured, name),
     uses: recipesUsing(rankedRecipes, name),
   });
 
@@ -203,16 +216,10 @@ function ProduceView({ produce, seasonal, rankedRecipes, selectedProduce, onSele
           on ? "bg-text/7" : ""
         }`}
       >
+        {/* Both layers are green; the section heading says which is which, so
+            colour is free to carry "is this cookable from your collection". */}
         <Icon
-          className={`h-4 w-4 shrink-0 ${
-            item.tone === "pick"
-              ? cookable
-                ? "text-pick"
-                : "text-pick-dim"
-              : cookable
-                ? "text-match"
-                : "text-match-dim"
-          }`}
+          className={`h-4 w-4 shrink-0 ${cookable ? "text-match" : "text-match-dim"}`}
           strokeWidth={1.75}
         />
         <span
@@ -221,9 +228,27 @@ function ProduceView({ produce, seasonal, rankedRecipes, selectedProduce, onSele
           }`}
         >
           <span className="truncate">{item.name}</span>
-          {item.starred && (
-            <Star className="h-3 w-3 shrink-0 fill-pick text-pick" />
-          )}
+          {/* Non-gold stars take the tile's own tone via currentColor, so a
+              tile nothing uses dims its star along with everything else. */}
+          {item.pickOfWeek ? (
+            <Star
+              className="h-3 w-3 shrink-0 fill-gold text-gold"
+              aria-label="Pick of the week"
+            />
+          ) : item.featured ? (
+            <Star
+              className={`h-3 w-3 shrink-0 fill-current ${
+                cookable ? "text-match" : "text-match-dim"
+              }`}
+              aria-label="Featured this week"
+            />
+          ) : item.tone === "pick" ? (
+            <Star
+              className={`h-3 w-3 shrink-0 ${cookable ? "text-match" : "text-match-dim"}`}
+              strokeWidth={2}
+              aria-label="In this week's market update"
+            />
+          ) : null}
         </span>
         <span
           className={`shrink-0 text-[10.5px] tabular-nums ${
@@ -253,7 +278,9 @@ function ProduceView({ produce, seasonal, rankedRecipes, selectedProduce, onSele
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 pb-3">
-        <p className="px-2 pb-2 text-[9.5px] uppercase tracking-[0.18em] text-pick">
+        {/* Both section headings share the tiles' green — the wording is what
+            separates the layers now that neither column is red. */}
+        <p className="px-2 pb-2 text-[9.5px] uppercase tracking-[0.18em] text-match">
           Dave's Picks
         </p>
         <div className="space-y-1">
@@ -318,12 +345,13 @@ function SavedRecipesView({
           on ? "bg-text/7" : ""
         } ${dim ? "opacity-50" : ""}`}
       >
-        {/* Mela images are base64 data URIs and most recipes have none (150 of
-            215 image rows are external references), so the slot keeps its
-            footprint and falls back to the produce mark. */}
+        {/* Not every recipe has a photo, so the slot keeps its footprint and
+            falls back to the produce mark rather than collapsing. The image is
+            a full-resolution original the webview downscales to this 56px
+            slot — see imageSrc.js for why it can't be used as a bare path. */}
         <span className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-text/5">
           {rec.image ? (
-            <img src={rec.image} alt="" className="h-full w-full object-cover" />
+            <img src={imageSrc(rec.image)} alt="" className="h-full w-full object-cover" />
           ) : (
             <VEGETABLE className="h-[18px] w-[18px] text-text/22" strokeWidth={1.75} />
           )}

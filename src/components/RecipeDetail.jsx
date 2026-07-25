@@ -1,5 +1,6 @@
-import { ExternalLink, Clock, Heart, ChevronUp } from "lucide-react";
+import { ExternalLink, Clock, Heart, ChevronUp, Star } from "lucide-react";
 import { ingredientIcon } from "./icons.js";
+import { imageSrc } from "../imageSrc.js";
 
 const { invoke } = window.__TAURI__.core;
 
@@ -22,7 +23,13 @@ function inList(list, name) {
 // `ref` lands on the outer element so the In Season stack can scroll a
 // newly-expanded card to the top of the pane. React 19 passes ref as a plain
 // prop — no forwardRef needed.
-export default function RecipeDetail({ recipe, surfaceClass = "", onCollapse, ref }) {
+export default function RecipeDetail({
+  recipe,
+  surfaceClass = "",
+  onCollapse,
+  ref,
+  produce = {},
+}) {
   const ingredients = recipe.ingredients || [];
   // Dave's Picks (live market update) take precedence over the seasonal
   // table when a key ingredient is in both, matching the backend's scoring.
@@ -31,6 +38,14 @@ export default function RecipeDetail({ recipe, surfaceClass = "", onCollapse, re
 
   const hit = (name) =>
     !!name && (inList(pickMatches, name) || inList(seasonalMatches, name));
+  // One mark, three weights — no second symbol competing with it. Everything
+  // in this week's market update gets a star in the row's own green: outlined
+  // normally, filled if the newsletter also featured the item (called out for
+  // quality or value). The single "pick of the week" fills gold instead, the
+  // only place that distinction is drawn in the ingredient list.
+  const isPick = (name) => !!name && inList(pickMatches, name);
+  const isFeatured = (name) => !!name && inList(produce.featured || [], name);
+  const isPickOfWeek = (name) => !!name && inList(produce.pick || [], name);
 
   // key_ingredients is a bare name list, so the pantry flag has to come from
   // the matching ingredient row. Unanalysed lines have no name and no flag —
@@ -52,7 +67,7 @@ export default function RecipeDetail({ recipe, surfaceClass = "", onCollapse, re
           below it loses its footing. */}
       {recipe.image && (
         <div className="relative h-52 w-full overflow-hidden">
-          <img src={recipe.image} alt="" className="h-full w-full object-cover" />
+          <img src={imageSrc(recipe.image)} alt="" className="h-full w-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-b from-pane/10 via-pane/55 to-pane" />
         </div>
       )}
@@ -156,8 +171,22 @@ export default function RecipeDetail({ recipe, surfaceClass = "", onCollapse, re
         )}
 
         <div className="mt-10 grid grid-cols-2 gap-x-10 gap-y-2">
-          <Col title="Produce" rows={produceRows} hit={hit} />
-          <Col title="Pantry" rows={pantryRows} hit={() => false} />
+          <Col
+            title="Produce"
+            rows={produceRows}
+            hit={hit}
+            isPick={isPick}
+            isFeatured={isFeatured}
+            isPickOfWeek={isPickOfWeek}
+          />
+          <Col
+            title="Pantry"
+            rows={pantryRows}
+            hit={() => false}
+            isPick={() => false}
+            isFeatured={() => false}
+            isPickOfWeek={() => false}
+          />
         </div>
       </div>
     </div>
@@ -167,7 +196,7 @@ export default function RecipeDetail({ recipe, surfaceClass = "", onCollapse, re
 // Text colour alone marks a seasonal match — no checkbox, which would imply
 // availability, and no row fill, which competes with the chips above. An
 // unfixed line (no name) shows its raw display text in italic alert colour.
-function Col({ title, rows, hit }) {
+function Col({ title, rows, hit, isPick, isFeatured, isPickOfWeek }) {
   return (
     <div>
       <p className="mb-3 text-[9.5px] uppercase tracking-[0.18em] text-text/32">{title}</p>
@@ -176,7 +205,7 @@ function Col({ title, rows, hit }) {
           <div
             key={index}
             title={ingredient.name ? ingredient.display : undefined}
-            className={`truncate px-3 py-1.5 text-[13px] capitalize ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-[13px] capitalize ${
               ingredient.name ? "" : "italic"
             } ${
               hit(ingredient.name)
@@ -186,7 +215,30 @@ function Col({ title, rows, hit }) {
                   : "text-alert-soft/75"
             }`}
           >
-            {ingredient.name || ingredient.display}
+            {/* truncate moved onto the text so a long name can't clip the
+                star off the end of the row */}
+            <span className="truncate">{ingredient.name || ingredient.display}</span>
+            {/* Green stars carry no colour class of their own: currentColor
+                inherits the row's match tint, so they track it. Gold is the
+                one deliberate break, and only the pick of the week gets it. */}
+            {isPickOfWeek(ingredient.name) ? (
+              <Star
+                className="h-2.5 w-2.5 shrink-0 fill-gold text-gold"
+                aria-label="Pick of the week"
+              />
+            ) : isFeatured(ingredient.name) ? (
+              <Star
+                className="h-2.5 w-2.5 shrink-0 fill-current"
+                strokeWidth={2}
+                aria-label="Featured this week"
+              />
+            ) : isPick(ingredient.name) ? (
+              <Star
+                className="h-2.5 w-2.5 shrink-0"
+                strokeWidth={2}
+                aria-label="In this week's market update"
+              />
+            ) : null}
           </div>
         ))}
         {rows.length === 0 && <p className="px-3 text-[12.5px] text-text/22">None.</p>}

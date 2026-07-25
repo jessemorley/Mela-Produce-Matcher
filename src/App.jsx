@@ -8,6 +8,7 @@ import FixNowQueue from "./components/FixNowQueue.jsx";
 import { ContextMenu, useContextMenu } from "./components/ContextMenu.jsx";
 import { produceIcon } from "./components/icons.js";
 import { resolveOpen } from "./openCard.js";
+import { imageSrc } from "./imageSrc.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -341,9 +342,10 @@ export default function App() {
                 key={selectedProduce.name}
                 item={selectedProduce}
                 recipes={produceRecipes}
+                produce={produce}
               />
             ) : activeRecipe ? (
-              <RecipeDetail recipe={activeRecipe} />
+              <RecipeDetail recipe={activeRecipe} produce={produce} />
             ) : (
               <EmptyPane
                 icon={<Leaf className="h-6 w-6 text-text/22" strokeWidth={1.5} />}
@@ -404,17 +406,13 @@ function EmptyPane({ icon, body }) {
 // Rendered with key={produce name} by the caller, so picking different
 // produce remounts this and resets which card is open — otherwise a
 // deliberate collapse would persist into the next selection.
-function ProducePane({ item, recipes }) {
+function ProducePane({ item, recipes, produce }) {
   if (recipes.length === 0) {
     const Icon = produceIcon(item.type);
     return (
       <div className="flex flex-1 flex-col items-center justify-center rounded-2xl bg-pane px-10">
-        <Icon
-          className={`h-6 w-6 ${
-            item.tone === "pick" ? "text-pick-dim" : "text-match-dim"
-          }`}
-          strokeWidth={1.5}
-        />
+        {/* Green for both layers, matching the tiles this pane opens from. */}
+        <Icon className="h-6 w-6 text-match-dim" strokeWidth={1.5} />
         <p className="mt-3 max-w-[22rem] text-center text-[13px] leading-relaxed text-text/35">
           Nothing in your collection uses{" "}
           <span className="capitalize text-text/60">{item.name}</span> yet.
@@ -423,7 +421,7 @@ function ProducePane({ item, recipes }) {
     );
   }
 
-  return <ProduceStack recipes={recipes} />;
+  return <ProduceStack recipes={recipes} produce={produce} />;
 }
 
 // Stacked matches, one expanded at a time. A collapsed card is a short crop
@@ -431,7 +429,7 @@ function ProducePane({ item, recipes }) {
 // photos rather than a list of bars; the open one renders the full detail
 // body. Defaults to the top match open, so the pane is never just a strip of
 // headers.
-function ProduceStack({ recipes }) {
+function ProduceStack({ recipes, produce }) {
   // undefined = untouched, so default to the top match; null = deliberately
   // collapsed, which has to stick or the collapse button would appear to do
   // nothing on the first card.
@@ -464,6 +462,7 @@ function ProduceStack({ recipes }) {
             key={rec.id}
             ref={openRef}
             recipe={rec}
+            produce={produce}
             surfaceClass={`rounded-2xl bg-pane ${recipes.length === 1 ? "flex flex-1 flex-col" : ""}`}
             onCollapse={recipes.length > 1 ? () => setOpenId(null) : undefined}
           />
@@ -476,8 +475,7 @@ function ProduceStack({ recipes }) {
 }
 
 // Collapsed card: banner crop with the title over it. Falls back to a plain
-// bar when the recipe has no image — most don't (150 of 215 image rows in
-// Mela are external references, not inline data).
+// bar when the recipe has no image.
 function CollapsedRecipe({ recipe, onClick }) {
   return (
     <button
@@ -487,7 +485,7 @@ function CollapsedRecipe({ recipe, onClick }) {
       {recipe.image && (
         <>
           <img
-            src={recipe.image}
+            src={imageSrc(recipe.image)}
             alt=""
             className="h-24 w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
           />

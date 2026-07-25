@@ -6,6 +6,7 @@
 
    `match` — seasonal match rating, "Built around" chips, in-season produce
    `pick`  — Dave's Picks (the live market update)
+   `gold`  — the newsletter's single pick of the week, in ingredient lists
    `alert` — errors only; kept separate so it can't be read as a pick
 
    Declared in @theme, not :root, so these are real Tailwind colours:
@@ -26,6 +27,10 @@
   --color-pick: #c4453a;
   --color-pick-soft: #d9756b;
   --color-pick-dim: #6e2f29;
+
+  /* Warm and desaturated to sit on the bone ground without going neon —
+     it has to read as gold beside `match` green at 10px, filled. */
+  --color-gold: #d4a54a;
 
   --color-alert: #9e5a4e;
   --color-alert-soft: #c08878;
