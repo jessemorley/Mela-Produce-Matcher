@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -43,9 +43,14 @@ struct Recipe {
     total_time: String,
     #[serde(default, rename = "yield")]
     yield_: String,
-    // data: URI of the recipe's cover image (Mela's ZINDEX=0), or empty if
-    // Mela has no photo for it. Baked in at sync time so the frontend never
-    // touches Mela's SQLite directly.
+    // Absolute path to the recipe's cover image (Mela's ZINDEX=0) as written
+    // into the app data dir's `images/` at sync time, or empty if Mela has no
+    // photo for it. A path, not a data: URI — these are full-resolution
+    // originals (several MB each), so 215 of them base64'd into recipes.json
+    // made the file ~7MB to parse on every launch. The frontend loads them
+    // through Tauri's asset protocol instead (see convertFileSrc in
+    // RecipeList/RecipeDetail), which streams from disk and lets the webview
+    // cache and downscale them per display size.
     #[serde(default)]
     image: String,
     #[serde(default)]
@@ -90,9 +95,11 @@ fn parse_ingredient_lines(blob: &str) -> Vec<Ingredient> {
 // recipe (multi-photo recipes keep the rest at later indices); the first
 // one that sniffs as a real image wins, so a recipe whose ZINDEX 0 row
 // happens to be missing or corrupt still finds its photo elsewhere.
-fn cover_image_data_uri(
+fn cover_image_path(
     stmt: &mut rusqlite::Statement,
     external_dir: &std::path::Path,
+    images_dir: &std::path::Path,
+    recipe_id: &str,
     recipe_pk: i64,
 ) -> String {
     let Ok(rows) = stmt
@@ -102,17 +109,48 @@ fn cover_image_data_uri(
         return String::new();
     };
     for data in rows {
-        if let Some(uuid) = external_storage_uuid(&data) {
-            if let Ok(bytes) = std::fs::read(external_dir.join(uuid)) {
-                if let Some(uri) = sniff_image_data_uri(&bytes) {
-                    return uri;
-                }
+        let bytes = match external_storage_uuid(&data) {
+            Some(uuid) => match std::fs::read(external_dir.join(uuid)) {
+                Ok(b) => b,
+                Err(_) => continue,
+            },
+            None => match data.get(1..) {
+                Some(b) => b.to_vec(),
+                None => continue,
+            },
+        };
+        if let Some(ext) = image_extension(&bytes) {
+            if let Some(path) = write_cover_image(images_dir, recipe_id, ext, &bytes) {
+                return path;
             }
-        } else if let Some(uri) = data.get(1..).and_then(sniff_image_data_uri) {
-            return uri;
         }
     }
     String::new()
+}
+
+/// Writes one recipe's cover image beside the recipes cache, named by recipe
+/// ID so a re-sync overwrites in place rather than accumulating orphans.
+/// Returns the absolute path as a string (what `Recipe.image` holds).
+fn write_cover_image(
+    images_dir: &std::path::Path,
+    recipe_id: &str,
+    ext: &str,
+    bytes: &[u8],
+) -> Option<String> {
+    // Recipe IDs are Mela-generated UUID-ish strings, but they land in a
+    // filename here, so anything that isn't plainly safe becomes '_' — a
+    // stray '/' would otherwise write outside images_dir.
+    let safe: String = recipe_id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    if safe.is_empty() {
+        return None;
+    }
+    std::fs::create_dir_all(images_dir).ok()?;
+    let path = images_dir.join(format!("{safe}.{ext}"));
+    std::fs::write(&path, bytes).ok()?;
+    Some(path.to_string_lossy().into_owned())
 }
 
 // A Core Data external-storage marker: 0x02, then an ASCII UUID, then a
@@ -125,44 +163,28 @@ fn external_storage_uuid(data: &[u8]) -> Option<&str> {
         .then_some(s)
 }
 
-// List rows only ever show a recipe's photo at 56x56 CSS px, but Mela's
-// originals run up to several MB (full-resolution phone/DSLR photos or
-// scanned TIFFs) — encoding those straight to base64 for every recipe in
-// recipes.json is what made the Saved Recipes list stutter on every
-// re-render. 128px (2x the display size, for retina) as a re-encoded JPEG
-// gets each photo down to a few KB instead.
-const THUMBNAIL_PX: u32 = 128;
-
-fn sniff_image_data_uri(data: &[u8]) -> Option<String> {
-    let format = if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        image::ImageFormat::Jpeg
+/// Sniffs the format of a Mela image blob, returning the file extension to
+/// store it under — the bytes themselves are written through untouched, so
+/// this is purely "is this really an image, and what do I call the file".
+///
+/// Nothing is decoded or re-encoded any more: the originals are copied out
+/// at full resolution and the webview scales them down for whatever slot
+/// they land in. That also means HEIC needs no special case — WKWebView
+/// renders it natively via the system codec, which the `image` crate can't.
+fn image_extension(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
     } else if data.starts_with(b"\x89PNG\r\n\x1a\n") {
-        image::ImageFormat::Png
+        Some("png")
     } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
-        image::ImageFormat::WebP
+        Some("webp")
     } else if data.starts_with(b"MM\x00\x2a") || data.starts_with(b"II\x2a\x00") {
-        image::ImageFormat::Tiff
+        Some("tiff")
     } else if data.get(4..12) == Some(b"ftypheic") {
-        // Not in the `image` crate's decoder set (patent-encumbered, needs a
-        // system codec) — ship the original rather than drop the photo.
-        return Some(format!(
-            "data:image/heic;base64,{}",
-            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data)
-        ));
+        Some("heic")
     } else {
-        return None;
-    };
-    let thumb = image::load_from_memory_with_format(data, format)
-        .ok()?
-        .thumbnail(THUMBNAIL_PX, THUMBNAIL_PX);
-    let mut jpeg_bytes = Vec::new();
-    thumb
-        .write_to(&mut std::io::Cursor::new(&mut jpeg_bytes), image::ImageFormat::Jpeg)
-        .ok()?;
-    Some(format!(
-        "data:image/jpeg;base64,{}",
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &jpeg_bytes)
-    ))
+        None
+    }
 }
 
 fn mela_db_path() -> PathBuf {
@@ -201,12 +223,14 @@ fn recipe_ids(conn: &Connection) -> Result<Vec<(i64, String)>, String> {
 /// Full per-row read for one recipe (title/description/ingredients/favorite/
 /// time/yield/image/tags). `image_stmt`/`tags_stmt` are prepared once by the
 /// caller and threaded in so a batch of calls (`load_all_recipes`) doesn't
-/// re-prepare them per row.
+/// re-prepare them per row. `images_dir` is where cover photos get copied to
+/// (see `cover_image_path`).
 fn load_recipe(
     conn: &Connection,
     image_stmt: &mut rusqlite::Statement,
     tags_stmt: &mut rusqlite::Statement,
     external_data_dir: &std::path::Path,
+    images_dir: &std::path::Path,
     pk: i64,
 ) -> Result<Recipe, String> {
     conn.query_row(
@@ -215,8 +239,8 @@ fn load_recipe(
          FROM ZRECIPEOBJECT WHERE Z_PK = ?1",
         [pk],
         |row| {
+            let id = row.get::<_, Option<String>>(0)?.unwrap_or_default();
             Ok(Recipe {
-                id: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
                 title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
                 description: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
                 ingredients: parse_ingredient_lines(
@@ -225,7 +249,8 @@ fn load_recipe(
                 favorite: row.get::<_, Option<i64>>(4)?.unwrap_or(0) == 1,
                 total_time: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
                 yield_: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
-                image: cover_image_data_uri(image_stmt, external_data_dir, pk),
+                image: cover_image_path(image_stmt, external_data_dir, images_dir, &id, pk),
+                id,
                 tags: tags_stmt
                     .query_map([pk], |r| r.get::<_, String>(0))
                     .map(|rows| rows.filter_map(Result::ok).collect())
@@ -262,7 +287,7 @@ fn external_data_dir(db_path: &PathBuf) -> PathBuf {
 /// Loads every recipe from Mela (full scan). Used by `full_resync`; the
 /// incremental `sync_on_launch` path uses `recipe_ids` + `load_recipe`
 /// instead so it only reads rows that changed.
-fn load_all_recipes(db_path: &PathBuf) -> Result<Vec<Recipe>, String> {
+fn load_all_recipes(db_path: &PathBuf, images_dir: &std::path::Path) -> Result<Vec<Recipe>, String> {
     let conn = open_mela_db(db_path)?;
     let ids = recipe_ids(&conn)?;
     let mut image_stmt = prepare_image_stmt(&conn)?;
@@ -270,7 +295,9 @@ fn load_all_recipes(db_path: &PathBuf) -> Result<Vec<Recipe>, String> {
     let external_dir = external_data_dir(db_path);
     let mut recipes: Vec<Recipe> = ids
         .into_iter()
-        .map(|(pk, _)| load_recipe(&conn, &mut image_stmt, &mut tags_stmt, &external_dir, pk))
+        .map(|(pk, _)| {
+            load_recipe(&conn, &mut image_stmt, &mut tags_stmt, &external_dir, images_dir, pk)
+        })
         .collect::<Result<_, _>>()?;
     recipes.sort_by(|a, b| a.title.cmp(&b.title));
     Ok(recipes)
@@ -691,36 +718,139 @@ fn rank_weight(rank: usize) -> u32 {
 const PICK_WEIGHT: u32 = 3;
 const SEASONAL_WEIGHT: u32 = 1;
 
+// Produce that didn't make the 2-4 item key list still counts, at the same
+// worth as the lowest-ranked key ingredient. A noodle salad whose only key
+// produce is cucumber is still carrying green onion, coriander, ginger and
+// garlic, and rating it purely on the cucumber made it a coin flip between
+// 0% and 100%. Median recipe here has 2 produce key ingredients and 3
+// produce lines outside the key list, so this roughly doubles the evidence
+// each rating rests on.
+const SUPPORTING_WEIGHT: u32 = 1;
+
+// What an *unmatched* supporting ingredient costs the denominator. Below
+// PICK_WEIGHT on purpose: garlic is in 109 of 160 recipes here and has never
+// been a market pick, so charging it a full slot taxed every savoury recipe
+// for having aromatics. At 2 it still dilutes — fresh garlic is produce and
+// should pull its weight when out of season — just less than it earns.
+const SUPPORTING_COST: u32 = 2;
+
 /// Rates a recipe 0.0–1.0 on how *defining* its in-season ingredients are,
 /// across both layers: the live market update (`market`, weighted full) and
 /// the stable seasonal table (`seasonal`, weighted lower). Each key
 /// ingredient scores its rank weight times the best layer it hits; the
-/// rating is that sum over the max possible (every key ingredient a
-/// top-weighted market pick), so it's comparable across recipes regardless
+/// rating is that sum over the max possible (every *produce* key ingredient
+/// a top-weighted market pick), so it's comparable across recipes regardless
 /// of ingredient count. Returns the rating plus which matches came from each
 /// layer. Rating 0 means no hit in either layer.
+///
+/// Pantry key ingredients are skipped entirely — both sides of the fraction.
+/// Cream or stock can never be in season, so counting them as missed
+/// opportunities capped a perfectly seasonal recipe well below 1.0 (a
+/// cauliflower/potato/cream soup with both vegetables matching rated 48%).
+/// The rating asks "are this recipe's seasonal-capable ingredients in
+/// season", not "is every defining ingredient a market pick this week",
+/// which nothing ever is.
+///
+/// Dropping them from the denominator *only* is a bug: a pantry ingredient
+/// that matched a produce name still scored, pushing ratings past 100%
+/// (Pasta alla Norma hit 108%). Skipping is the whole rule — if an
+/// ingredient can't be in season, it can neither earn points nor cost them.
+///
+/// Produce *outside* the key list scores too, at `SUPPORTING_WEIGHT`. Rating
+/// on key ingredients alone meant a recipe with one produce key ingredient
+/// had a two-valued rating — 100% if it matched, 0% if not — while its other
+/// produce lines went unread. Supporting produce can lift a recipe or dilute
+/// it, but at the rank floor it can never outweigh what the recipe is
+/// actually built around. It also costs less than a full slot when it misses
+/// (`SUPPORTING_COST`) — see there — so the rating is clamped to 1.0.
 fn rate_recipe(
     recipe: &Recipe,
     market: &[String],
     seasonal: &[String],
 ) -> (f32, Vec<String>, Vec<String>) {
+    let is_pantry = |name: &str| {
+        recipe
+            .ingredients
+            .iter()
+            .any(|ing| ing.pantry && ing.name == name)
+    };
+
+    // Every produce ingredient that can earn points, as (weight, denominator
+    // cost, name): key ingredients by rank, then the supporting produce lines
+    // the key list left out. A key ingredient's slot costs what a perfect hit
+    // on it would earn; a supporting one costs less than it earns, so
+    // aromatics dilute a rating without dominating it.
+    let mut weighted: Vec<(u32, u32, &String)> = recipe
+        .key_ingredients
+        .iter()
+        .enumerate()
+        .filter(|(_, key)| !is_pantry(key))
+        .map(|(i, key)| (rank_weight(i), rank_weight(i) * PICK_WEIGHT, key))
+        .collect();
+    weighted.extend(
+        recipe
+            .ingredients
+            .iter()
+            .filter(|ing| {
+                !ing.pantry
+                    && !ing.name.is_empty()
+                    && !recipe.key_ingredients.contains(&ing.name)
+            })
+            .map(|ing| (SUPPORTING_WEIGHT, SUPPORTING_COST, &ing.name)),
+    );
+
     let mut score = 0u32;
     let mut max = 0u32;
     let mut market_matches = Vec::new();
     let mut seasonal_matches = Vec::new();
-    for (i, key) in recipe.key_ingredients.iter().enumerate() {
-        let weight = rank_weight(i);
-        max += weight * PICK_WEIGHT;
-        if market.iter().any(|p| produce_matches(p, key)) {
+    for (weight, cost, name) in weighted {
+        max += cost;
+        if market.iter().any(|p| produce_matches(p, name)) {
             score += weight * PICK_WEIGHT;
-            market_matches.push(key.clone());
-        } else if seasonal.iter().any(|p| produce_matches(p, key)) {
+            market_matches.push(name.clone());
+        } else if seasonal.iter().any(|p| produce_matches(p, name)) {
             score += weight * SEASONAL_WEIGHT;
-            seasonal_matches.push(key.clone());
+            seasonal_matches.push(name.clone());
         }
     }
-    let rating = if max == 0 { 0.0 } else { score as f32 / max as f32 };
+    // Supporting produce earns more than its slot costs, so an all-supporting,
+    // all-picks recipe can outscore its own denominator. Clamped rather than
+    // rebalanced: the alternative is charging aromatics full price again.
+    let rating = if max == 0 {
+        0.0
+    } else {
+        (score as f32 / max as f32).min(1.0)
+    };
     (rating, market_matches, seasonal_matches)
+}
+
+/// Copies everything Mela doesn't store onto a freshly-read recipe: the
+/// `excluded` flag, the Claude-analysed `key_ingredients`, and the per-line
+/// `name`/`pantry` classifications.
+///
+/// A fresh `load_recipe` sets all of these to empty/false, so any re-read
+/// path that skips this silently throws away every Claude call the user has
+/// paid for — `full_resync` used to carry `excluded` only, which un-analysed
+/// the entire collection on one button press. Ingredient data is matched by
+/// `display` (the verbatim Mela line) rather than by index, so an edit in
+/// Mela that adds or reorders lines re-analyses only the lines that actually
+/// changed instead of shifting every classification down by one.
+fn carry_over_local_fields(fresh: &mut Recipe, cached: &Recipe) {
+    fresh.excluded = cached.excluded;
+    fresh.key_ingredients = cached.key_ingredients.clone();
+
+    let by_display: HashMap<&str, &Ingredient> = cached
+        .ingredients
+        .iter()
+        .filter(|i| !i.name.is_empty())
+        .map(|i| (i.display.as_str(), i))
+        .collect();
+    for ingredient in fresh.ingredients.iter_mut() {
+        if let Some(prev) = by_display.get(ingredient.display.as_str()) {
+            ingredient.name = prev.name.clone();
+            ingredient.pantry = prev.pantry;
+        }
+    }
 }
 
 /// Diffs Mela's current ID list against the cache: recipes whose ID is
@@ -728,16 +858,6 @@ fn rate_recipe(
 /// the incremental sync), recipes gone from Mela are dropped, and the
 /// remaining Mela `Z_PK`s are returned for the caller to `load_recipe` fresh.
 /// Order follows `mela_ids`, matching Mela's own `ORDER BY ZTITLE`.
-/// IDs of recipes the user has marked "don't match" — used to carry the flag
-/// across a Mela re-read, which can't know about it.
-fn excluded_ids(recipes: &[Recipe]) -> HashSet<&str> {
-    recipes
-        .iter()
-        .filter(|r| r.excluded)
-        .map(|r| r.id.as_str())
-        .collect()
-}
-
 fn diff_recipe_ids(mela_ids: &[(i64, String)], cached: &[Recipe]) -> (Vec<i64>, Vec<Recipe>) {
     let cached_by_id: HashMap<&str, &Recipe> =
         cached.iter().map(|r| (r.id.as_str(), r)).collect();
@@ -914,6 +1034,12 @@ fn recipes_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("recipes.json"))
 }
 
+/// Cover photos copied out of Mela, one file per recipe ID. Lives beside
+/// recipes.json so the whole cache is one directory to delete.
+fn images_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("images"))
+}
+
 /// A missing or corrupt cache file is just a cache miss, never a hard error.
 fn load_produce_cache(app: &tauri::AppHandle) -> Option<ProduceCache> {
     let path = produce_cache_path(app).ok()?;
@@ -1068,9 +1194,18 @@ async fn sync_on_launch(
     let mut image_stmt = prepare_image_stmt(&conn)?;
     let mut tags_stmt = prepare_tags_stmt(&conn)?;
     let external_dir = external_data_dir(&mela_db_path());
+    let images = images_dir(&app)?;
     for pk in new_pks {
-        recipes.push(load_recipe(&conn, &mut image_stmt, &mut tags_stmt, &external_dir, pk)?);
+        recipes.push(load_recipe(
+            &conn,
+            &mut image_stmt,
+            &mut tags_stmt,
+            &external_dir,
+            &images,
+            pk,
+        )?);
     }
+
     recipes.sort_by(|a, b| a.title.cmp(&b.title));
     save_recipes_cache(&app, &recipes)?;
 
@@ -1101,16 +1236,20 @@ async fn full_resync(
     let (produce, produce_from_cache) = sync_produce(&app, &running).await?;
 
     let _ = app.emit("status", "Resyncing all recipes from Mela...");
-    let mut recipes = load_all_recipes(&mela_db_path())?;
+    let mut recipes = load_all_recipes(&mela_db_path(), &images_dir(&app)?)?;
     if recipes.is_empty() {
         return Err(format!("No recipes found in {}", mela_db_path().display()));
     }
-    // Mela knows nothing about `excluded`, so a fresh read would silently
-    // un-exclude everything the user marked. Carry it over from the cache.
+    // Mela stores none of `excluded`/`key_ingredients`/ingredient names, so a
+    // fresh read starts them empty — without this the button would discard
+    // every Claude analysis in the collection.
     let cached = load_recipes_cache(&app).unwrap_or_default();
-    let excluded = excluded_ids(&cached);
+    let cached_by_id: HashMap<&str, &Recipe> =
+        cached.iter().map(|r| (r.id.as_str(), r)).collect();
     for r in recipes.iter_mut() {
-        r.excluded = excluded.contains(r.id.as_str());
+        if let Some(prev) = cached_by_id.get(r.id.as_str()) {
+            carry_over_local_fields(r, prev);
+        }
     }
     save_recipes_cache(&app, &recipes)?;
 
@@ -1137,13 +1276,20 @@ fn resync_recipe(app: tauri::AppHandle, id: String) -> Result<Recipe, String> {
     let mut image_stmt = prepare_image_stmt(&conn)?;
     let mut tags_stmt = prepare_tags_stmt(&conn)?;
     let external_dir = external_data_dir(&db_path);
-    let mut fresh = load_recipe(&conn, &mut image_stmt, &mut tags_stmt, &external_dir, *pk)?;
+    let mut fresh = load_recipe(
+        &conn,
+        &mut image_stmt,
+        &mut tags_stmt,
+        &external_dir,
+        &images_dir(&app)?,
+        *pk,
+    )?;
 
     match recipes.iter().position(|r| r.id == id) {
         Some(i) => {
-            // See full_resync: `excluded` is ours, not Mela's, so a re-read
-            // must not clear it.
-            fresh.excluded = recipes[i].excluded;
+            // See full_resync: `excluded`, `key_ingredients` and the per-line
+            // names are ours, not Mela's, so a re-read must not clear them.
+            carry_over_local_fields(&mut fresh, &recipes[i]);
             recipes[i] = fresh.clone();
         }
         None => recipes.push(fresh.clone()),
@@ -1406,22 +1552,81 @@ mod tests {
     }
 
     #[test]
-    fn sniffs_known_image_formats_and_shrinks_them_to_a_thumbnail() {
-        for format in [
-            image::ImageFormat::Jpeg,
-            image::ImageFormat::Png,
-            image::ImageFormat::WebP,
-            image::ImageFormat::Tiff,
+    fn sniffs_known_image_formats_to_their_extension() {
+        for (format, ext) in [
+            (image::ImageFormat::Jpeg, "jpg"),
+            (image::ImageFormat::Png, "png"),
+            (image::ImageFormat::WebP, "webp"),
+            (image::ImageFormat::Tiff, "tiff"),
         ] {
-            let uri = sniff_image_data_uri(&encode(format)).unwrap();
-            assert!(uri.starts_with("data:image/jpeg;base64,"), "format {format:?} -> {uri}");
+            assert_eq!(image_extension(&encode(format)), Some(ext), "format {format:?}");
         }
-        // HEIC isn't decodable by this build, so it's shipped as-is rather
-        // than dropped or mis-sniffed as junk.
-        assert!(sniff_image_data_uri(b"1234ftypheicrest")
-            .unwrap()
-            .starts_with("data:image/heic;base64,"));
-        assert!(sniff_image_data_uri(b"not an image").is_none());
+        // HEIC is stored as-is and rendered by the system codec — the `image`
+        // crate can't decode it, which is why nothing is transcoded here.
+        assert_eq!(image_extension(b"1234ftypheicrest"), Some("heic"));
+        assert_eq!(image_extension(b"not an image"), None);
+    }
+
+    #[test]
+    fn cover_images_are_written_inside_the_images_dir() {
+        let dir = std::env::temp_dir().join(format!("recipeapp-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let path = write_cover_image(&dir, "ABC-123", "jpg", b"bytes").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"bytes");
+
+        // A separator in the ID must not escape the directory.
+        let escaped = write_cover_image(&dir, "../../evil", "jpg", b"x").unwrap();
+        assert_eq!(std::path::Path::new(&escaped).parent(), Some(dir.as_path()));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A resync reads from Mela, which stores none of this — so if the
+    // carry-over stops working the user loses every Claude call they've paid
+    // for, silently, on one button press. That's what this pins.
+    #[test]
+    fn a_resync_keeps_analysis_that_mela_does_not_store() {
+        let cached = Recipe {
+            id: "r1".into(),
+            title: "Fig Salad".into(),
+            description: String::new(),
+            ingredients: vec![
+                Ingredient { display: "3 figs".into(), name: "fig".into(), pantry: false },
+                Ingredient { display: "1 tsp salt".into(), name: "salt".into(), pantry: true },
+            ],
+            favorite: false,
+            total_time: String::new(),
+            yield_: String::new(),
+            image: String::new(),
+            tags: vec![],
+            key_ingredients: vec!["fig".into()],
+            excluded: true,
+        };
+        // What load_recipe returns: Mela's fields only, the rest empty.
+        let mut fresh = Recipe {
+            ingredients: vec![
+                Ingredient { display: "3 figs".into(), name: String::new(), pantry: false },
+                // Reordered + a new line, to prove matching is by display and
+                // not by position.
+                Ingredient { display: "1 lemon".into(), name: String::new(), pantry: false },
+                Ingredient { display: "1 tsp salt".into(), name: String::new(), pantry: false },
+            ],
+            key_ingredients: vec![],
+            excluded: false,
+            ..cached.clone()
+        };
+
+        carry_over_local_fields(&mut fresh, &cached);
+
+        assert_eq!(fresh.key_ingredients, vec!["fig".to_string()]);
+        assert!(fresh.excluded);
+        assert_eq!(fresh.ingredients[0].name, "fig");
+        assert_eq!(fresh.ingredients[2].name, "salt");
+        assert!(fresh.ingredients[2].pantry, "pantry flag must survive too");
+        // Genuinely new line stays unanalysed rather than inheriting a
+        // neighbour's name.
+        assert_eq!(fresh.ingredients[1].name, "");
     }
 
     #[test]
@@ -1473,7 +1678,7 @@ mod tests {
             favorite: true,
             total_time: "25min".into(),
             yield_: "2".into(),
-            image: "data:image/jpeg;base64,abc".into(),
+            image: "/tmp/images/abc.jpg".into(),
             tags: vec!["Salads".into()],
             key_ingredients: vec!["figs".into()],
             excluded: true,
@@ -1489,7 +1694,7 @@ mod tests {
         assert!(parsed[0].favorite);
         assert_eq!(parsed[0].total_time, "25min");
         assert_eq!(parsed[0].yield_, "2");
-        assert_eq!(parsed[0].image, "data:image/jpeg;base64,abc");
+        assert_eq!(parsed[0].image, "/tmp/images/abc.jpg");
         assert_eq!(parsed[0].tags, vec!["Salads".to_string()]);
         assert_eq!(parsed[0].key_ingredients, vec!["figs".to_string()]);
         assert!(parsed[0].excluded);
@@ -1501,16 +1706,6 @@ mod tests {
         let json = r#"[{"id":"a","title":"T","description":"","ingredients":[]}]"#;
         let parsed: Vec<Recipe> = serde_json::from_str(json).unwrap();
         assert!(!parsed[0].excluded);
-    }
-
-    #[test]
-    fn excluded_ids_carries_the_flag_across_a_mela_reread() {
-        let mut kept = recipe("keep", "Keeper", &["asparagus"]);
-        kept.excluded = true;
-        let cached = vec![kept, recipe("drop", "Dropper", &["fig"])];
-        let ids = excluded_ids(&cached);
-        assert!(ids.contains("keep"));
-        assert!(!ids.contains("drop"));
     }
 
     fn ing(display: &str, name: &str, pantry: bool) -> Ingredient {
@@ -1705,6 +1900,108 @@ mod tests {
         unanalysed.ingredients = vec![unfixed("2 tbsp mystery sauce")];
 
         assert_eq!(unfixed_ingredients(&[analysed, unanalysed]), 1);
+    }
+
+    // A pantry key ingredient can never be in season, so it must not sit in
+    // the denominator dragging the rating down. Cauliflower soup: both
+    // vegetables match (one seasonal, one pick), cream can't — that should
+    // read as a strong match, not the 48% it scored when cream counted.
+    #[test]
+    fn pantry_key_ingredients_are_left_out_of_the_denominator() {
+        let mut soup = recipe("a", "Cauliflower Soup", &["cauliflower", "potato", "cream"]);
+        soup.ingredients = vec![
+            ing("1 head cauliflower", "cauliflower", false),
+            ing("2 potatoes", "potato", false),
+            ing("100ml cream", "cream", true),
+        ];
+        let (rating, picks, seasonal) = rate_recipe(
+            &soup,
+            &["potato".to_string()],
+            &["cauliflower".to_string()],
+        );
+        assert_eq!(picks, vec!["potato"]);
+        assert_eq!(seasonal, vec!["cauliflower"]);
+        // cauliflower 4*1 + potato 3*3 = 13, over (4+3)*3 = 21 with cream out.
+        assert!((rating - 13.0 / 21.0).abs() < 1e-6, "rating was {rating}");
+    }
+
+    // A pantry key ingredient whose name collides with in-season produce must
+    // not score either — dropping it from the denominator alone let the
+    // numerator run past it and rated Pasta alla Norma 108%.
+    #[test]
+    fn a_matching_pantry_key_ingredient_cannot_push_the_rating_past_one() {
+        let mut norma = recipe("a", "Pasta alla Norma", &["eggplant", "tomato", "basil"]);
+        norma.ingredients = vec![
+            ing("1 eggplant", "eggplant", false),
+            ing("400g tomatoes", "tomato", false),
+            ing("dried basil", "basil", true), // pantry, but in the produce table
+        ];
+        let market = vec![
+            "eggplant".to_string(),
+            "tomato".to_string(),
+            "basil".to_string(),
+        ];
+        let (rating, picks, _) = rate_recipe(&norma, &market, &[]);
+        assert_eq!(rating, 1.0, "every produce key ingredient is a pick");
+        assert_eq!(picks, vec!["eggplant", "tomato"]); // basil is not a match
+    }
+
+    // Produce outside the key list still counts. The noodle salad's only
+    // produce key ingredient is cucumber (udon and tahini are pantry), so
+    // scoring the key list alone made its rating two-valued: 100% or 0%.
+    #[test]
+    fn supporting_produce_counts_but_cannot_outweigh_a_defining_ingredient() {
+        let mut salad = recipe(
+            "a",
+            "Creamy Sesame Noodle Salad",
+            &["udon noodles", "cucumber", "tahini"],
+        );
+        salad.ingredients = vec![
+            ing("8 oz udon noodles", "udon noodles", true),
+            ing("1 large cucumber", "cucumber", false),
+            ing("1/2 cup green onion", "green onion", false),
+            ing("1/2 cup cilantro", "cilantro", false),
+            ing("3 Tbsp tahini", "tahini", true),
+            ing("1 Tbsp minced ginger", "ginger", false),
+        ];
+
+        // Cucumber alone no longer buys a perfect score: the three
+        // supporting produce lines are in the denominator now.
+        let (cucumber_only, ..) = rate_recipe(&salad, &["cucumber".to_string()], &[]);
+        assert!(
+            cucumber_only < 1.0,
+            "one key match shouldn't rate 100% with 3 unmatched produce lines, got {cucumber_only}"
+        );
+        // cucumber 3*3=9 over 9 + three supporting slots at 2 = 15.
+        assert!((cucumber_only - 9.0 / 15.0).abs() < 1e-6, "got {cucumber_only}");
+
+        // ...and supporting produce alone rates lower than the defining one.
+        let (supporting_only, _, seasonal) = rate_recipe(
+            &salad,
+            &[],
+            &["green onion".to_string(), "cilantro".to_string()],
+        );
+        assert!(
+            supporting_only < cucumber_only,
+            "supporting {supporting_only} should trail defining {cucumber_only}"
+        );
+        assert_eq!(seasonal, vec!["green onion", "cilantro"]);
+    }
+
+    // Supporting produce earns 3 on a pick but only costs 2, so a recipe made
+    // entirely of matching supporting produce scores past its denominator.
+    // The clamp is what keeps the UI's percentage honest.
+    #[test]
+    fn supporting_produce_cannot_rate_above_one() {
+        let mut r = recipe("a", "Aromatics", &["stock"]);
+        r.ingredients = vec![
+            ing("stock", "stock", true), // pantry: no key slot in the denominator
+            ing("garlic", "garlic", false),
+            ing("onion", "onion", false),
+        ];
+        let market = vec!["garlic".to_string(), "onion".to_string()];
+        let (rating, ..) = rate_recipe(&r, &market, &[]);
+        assert_eq!(rating, 1.0, "6/4 must clamp, not report 150%");
     }
 
     #[test]
