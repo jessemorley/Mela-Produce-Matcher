@@ -4,23 +4,31 @@
   "version": "0.1.0",
   "identifier": "com.jessmorley.recipesuggester",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "withGlobalTauri": true,
     "windows": [
       {
         "title": "Seasonal Recipes",
-        "width": 900,
-        "height": 640,
-        "minWidth": 640,
+        "width": 1280,
+        "height": 800,
+        "minWidth": 630,
         "minHeight": 480,
         "titleBarStyle": "Overlay",
-        "hiddenTitle": true
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 20, "y": 37 }
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/images/**"]
+      }
     }
   },
   "bundle": {

@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+/* The chosen "newsprint" palette. Hand-picked hex on a warmed ground —
+   Tailwind's emerald/amber defaults and the blue-leaning neutral-* greys were
+   most of why the old scheme read as generic.
+
+   `match` — seasonal match rating, "Built around" chips, in-season produce
+   `pick`  — Dave's Picks (the live market update)
+   `gold`  — the newsletter's single pick of the week, in ingredient lists
+   `alert` — errors only; kept separate so it can't be read as a pick
+
+   Declared in @theme, not :root, so these are real Tailwind colours:
+   `bg-pane`, `text-text/60`, `fill-pick`. That matters — an opacity modifier
+   on a bare `var(--x)` arbitrary value (`text-[var(--text)]/60`) silently
+   compiles to *nothing* in Tailwind v4, which builds clean and renders
+   unstyled. Every neutral here is an alpha tint of `text`, so the whole UI
+   stays a tint of the same warm bone. */
+@theme {
+  --color-ground: #131211;
+  --color-pane: #1b1a18;
+  --color-text: #ede9e3;
+
+  --color-match: #9fc08a;
+  --color-match-soft: #bad4a8;
+  --color-match-dim: #5c7350;
+
+  --color-pick: #c4453a;
+  --color-pick-soft: #d9756b;
+  --color-pick-dim: #6e2f29;
+
+  /* Warm and desaturated to sit on the bone ground without going neon —
+     it has to read as gold beside `match` green at 10px, filled. */
+  --color-gold: #d4a54a;
+
+  --color-alert: #9e5a4e;
+  --color-alert-soft: #c08878;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+/* Scrollbars: always visible, styled to match the palette. The bar reserves
+   ~9px of layout width, which is why the detail pane's banner image stops
+   just short of the pane edge. */
+*::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* The border insets the thumb from the track (background-clip: content-box
+   means only the content box paints), so it costs 2x its width. */
+*::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--color-text) 25%, transparent);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover,
+*::-webkit-scrollbar-thumb:active {
+  background-color: color-mix(in oklab, var(--color-text) 45%, transparent);
+}
+
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+  background: var(--color-ground);
+  color: var(--color-text);
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+}
