@@ -23,10 +23,23 @@ export default function Sidebar({
       className="hidden shrink-0 flex-col overflow-hidden min-[820px]:flex"
       style={{ width: "var(--sidebar)" }}
     >
+      {/* The traffic lights are drawn by macOS over the top-left of the
+          window (titleBarStyle: Overlay), so the sidebar header starts below
+          them. The spacer is a drag region in its own right: App.jsx's
+          window-wide band sits *behind* the panes, so it only covers bare
+          ground — an opaque pane has to carry its own. */}
+      <div className="h-7 shrink-0" data-tauri-drag-region="deep" />
+
       {/* src-tauri/icons/ still holds the default Tauri placeholder (cyan and
           yellow), which fights the palette — so the mark is drawn here in the
           app's own accents until a real icon exists. */}
-      <div className="flex items-center gap-2.5 px-2.5 pb-6 pt-5">
+      {/* "deep" so the wordmark and tagline drag too — they sit inside the
+          window's top drag band. The resync button inside is still blocked
+          from dragging by Tauri's own clickable-element check. */}
+      <div
+        className="flex items-center gap-2.5 px-2.5 pb-6 pt-3"
+        data-tauri-drag-region="deep"
+      >
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-match/14">
           <VEGETABLE className="h-[18px] w-[18px] text-match" strokeWidth={1.75} />
         </span>

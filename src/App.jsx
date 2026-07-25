@@ -209,8 +209,26 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen flex-col overflow-hidden bg-ground font-sans text-text/72 select-none">
-      <div className="h-8 shrink-0" data-tauri-drag-region />
+    <div className="relative flex h-screen w-screen flex-col overflow-hidden bg-ground font-sans text-text/72 select-none">
+      {/* Drag from anywhere in the top 50px, across the full window width.
+          There's no single overlay element doing this — one stretched across
+          the top would be the topmost thing in the composed path everywhere,
+          and Tauri's clickable check would see that empty div instead of the
+          button beneath it, killing every control in the band.
+
+          Instead each surface in that band carries its own region: the bare
+          ground between and beside the panes (the strip below), the sidebar's
+          header spacer, and a strip inside each opaque pane. Two rules govern
+          all of them:
+
+          - "deep", not a bare attribute. Tauri walks the composed path of a
+            real mousedown; a bare attribute only drags on a *direct* hit of
+            that exact element, so any child (a heading, a count) would block
+            it. "deep" drags from anywhere in the subtree.
+          - Never pointer-events-none. An element with it never enters the
+            composed path at all, so the window silently stops dragging.
+            It also isn't needed — Tauri already treats BUTTON/INPUT/A as
+            clickable and refuses to drag from them. */}
 
       {/* One pane gives up width at a time, in priority order — the detail
           pane absorbs everything first, then the list, then the sidebar:
@@ -229,7 +247,12 @@ export default function App() {
         @media (min-width: 820px) { .shell { --rail: calc(var(--sidebar) + 10px); } }
       `}</style>
 
-      <div className="shell flex min-h-0 flex-1 gap-2.5 px-2.5 pb-2.5">
+      {/* The bare ground in the band — the shell's padding and the gaps
+          between panes. It sits behind the panes (they're z-10), so it only
+          receives the mousedown where no pane covers it. */}
+      <div className="absolute inset-x-0 top-0 h-[50px]" data-tauri-drag-region="deep" />
+
+      <div className="shell relative z-10 flex min-h-0 flex-1 gap-2.5 p-2.5">
         <Sidebar
           selectedNav={selectedNav}
           onSelectNav={setSelectedNav}
@@ -277,22 +300,42 @@ export default function App() {
             their own surfaces, so the slot drops its pane fill in that case
             only; otherwise cards would sit on a second background. */}
         <main
-          className={`min-w-[300px] flex-1 overflow-y-auto ${
+          className={`relative min-w-[300px] flex-1 overflow-y-auto ${
             selectedProduce && !showArticle ? "" : "rounded-2xl bg-pane"
           }`}
         >
-          {showArticle ? (
-            <ArticleView title={feedTitle} html={feedHtml} onBack={() => setShowArticle(false)} />
-          ) : selectedProduce ? (
-            <ProducePane item={selectedProduce} recipes={produceRecipes} />
-          ) : activeRecipe ? (
-            <RecipeDetail recipe={activeRecipe} />
-          ) : (
-            <EmptyPane
-              icon={<Leaf className="h-6 w-6 text-text/22" strokeWidth={1.5} />}
-              body="Select a recipe or a piece of produce to see it here."
-            />
-          )}
+          {/* This pane is opaque too, so it carries its own drag strip. It's
+              `sticky`, not `absolute`: the pane scrolls, and an absolute strip
+              would scroll out of the top 50px along with the content. Zero
+              height with a 50px overflow so it takes no layout space and
+              doesn't push the recipe banner down.
+
+              A negative z-index would be painted over by this pane's own
+              bg-pane, so it stays at the default level and the content is
+              lifted above it with `relative z-10` instead — otherwise this
+              strip would cover the image banner and the "Open in Mela"
+              button and eat their clicks. */}
+          <div className="sticky top-0 h-0 overflow-visible" aria-hidden="true">
+            <div className="h-[50px] w-full" data-tauri-drag-region="deep" />
+          </div>
+
+          {/* min-h-full, not h-full: EmptyPane and ProducePane both resolve
+              their own full height against this, but a long recipe still has
+              to be able to exceed it. */}
+          <div className="relative z-10 min-h-full">
+            {showArticle ? (
+              <ArticleView title={feedTitle} html={feedHtml} onBack={() => setShowArticle(false)} />
+            ) : selectedProduce ? (
+              <ProducePane item={selectedProduce} recipes={produceRecipes} />
+            ) : activeRecipe ? (
+              <RecipeDetail recipe={activeRecipe} />
+            ) : (
+              <EmptyPane
+                icon={<Leaf className="h-6 w-6 text-text/22" strokeWidth={1.5} />}
+                body="Select a recipe or a piece of produce to see it here."
+              />
+            )}
+          </div>
         </main>
       </div>
 

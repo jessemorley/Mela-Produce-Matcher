@@ -6,9 +6,16 @@ import StatusBar from "./StatusBar.jsx";
 
 // Header of every list view — same slot, same chrome, so switching nav never
 // moves the pane's furniture.
+// Sits inside the pane's top drag band and is lifted above the strip
+// (`relative z-10`) so it renders on top — which means the strip below can't
+// see the mousedown, so the header carries "deep" itself. Text and counts
+// drag; any real button inside is still blocked by Tauri's clickable check.
 function ListHeader({ title, count, total }) {
   return (
-    <div className="flex items-baseline justify-between px-5 pb-4 pt-5">
+    <div
+      className="relative z-10 flex items-baseline justify-between px-5 pb-4 pt-5"
+      data-tauri-drag-region="deep"
+    >
       <h2 className="text-[12.5px] font-medium text-text/70">{title}</h2>
       <span className="text-[10.5px] tabular-nums text-text/30">
         {total !== undefined && total !== count ? `${count} of ${total}` : count}
@@ -428,15 +435,29 @@ export default function RecipeList({
     // the two trading a jump at each breakpoint. The middle term is what's
     // left once the sidebar, gutters and a 300px detail pane are accounted for.
     <section
-      className="flex shrink-0 flex-col overflow-hidden rounded-2xl bg-pane"
+      className="relative flex shrink-0 flex-col overflow-hidden rounded-2xl bg-pane"
       style={{ width: "clamp(300px, calc(100vw - var(--rail) - 340px), 23rem)" }}
     >
+      {/* This pane is opaque, so the window-wide drag band in App.jsx (which
+          sits behind the panes) can't show through it — it carries its own.
+          Absolute so it overlays the pane's top without taking layout space:
+          the list header keeps its own padding, and this just makes the space
+          around it draggable.
+
+          It stays at the default level rather than -z-10, which this pane's
+          own bg-pane would paint over; the views below lift themselves above
+          it with `relative z-10` so their headers and rows stay clickable. */}
+      <div className="absolute inset-x-0 top-0 h-[50px]" data-tauri-drag-region="deep" />
+
       {/* Below 820px the sidebar is gone, so nav and status have to live
           somewhere: a compact strip at the top of this pane. Categories are
           unreachable here — no room for a long list — but an active filter can
           still be cleared via its chip. */}
-      <div className="min-[820px]:hidden">
-        <div className="flex gap-1 px-2.5 pt-2.5">
+      <div className="relative z-10 min-[820px]:hidden">
+        {/* Clearance for the traffic lights, which this pane sits under once
+            the sidebar is hidden. */}
+        <div className="h-7 shrink-0" />
+        <div className="flex gap-1 px-2.5 pt-1">
           {NAV.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
