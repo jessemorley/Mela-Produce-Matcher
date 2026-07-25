@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -57,6 +57,12 @@ struct Recipe {
     // re-read (see diff_recipe_ids).
     #[serde(default)]
     key_ingredients: Vec<String>,
+    // User-marked "never match this" (a vegan cheese sauce has no seasonal
+    // produce story). Skipped by match_recipes and by analyze_new_recipes,
+    // so excluding a recipe before its first analysis also saves the Claude
+    // call. Set only via set_excluded; a Mela resync never touches it.
+    #[serde(default)]
+    excluded: bool,
 }
 
 // Mela stores ingredients as one blob of newline-separated lines, with
@@ -225,6 +231,7 @@ fn load_recipe(
                     .map(|rows| rows.filter_map(Result::ok).collect())
                     .unwrap_or_default(),
                 key_ingredients: Vec::new(),
+                excluded: false,
             })
         },
     )
@@ -721,6 +728,16 @@ fn rate_recipe(
 /// the incremental sync), recipes gone from Mela are dropped, and the
 /// remaining Mela `Z_PK`s are returned for the caller to `load_recipe` fresh.
 /// Order follows `mela_ids`, matching Mela's own `ORDER BY ZTITLE`.
+/// IDs of recipes the user has marked "don't match" — used to carry the flag
+/// across a Mela re-read, which can't know about it.
+fn excluded_ids(recipes: &[Recipe]) -> HashSet<&str> {
+    recipes
+        .iter()
+        .filter(|r| r.excluded)
+        .map(|r| r.id.as_str())
+        .collect()
+}
+
 fn diff_recipe_ids(mela_ids: &[(i64, String)], cached: &[Recipe]) -> (Vec<i64>, Vec<Recipe>) {
     let cached_by_id: HashMap<&str, &Recipe> =
         cached.iter().map(|r| (r.id.as_str(), r)).collect();
@@ -944,7 +961,7 @@ struct SyncResult {
 fn unfixed_ingredients(recipes: &[Recipe]) -> usize {
     recipes
         .iter()
-        .filter(|r| !r.key_ingredients.is_empty())
+        .filter(|r| !r.key_ingredients.is_empty() && !r.excluded)
         .flat_map(|r| r.ingredients.iter())
         .filter(|i| i.name.is_empty())
         .count()
@@ -1012,7 +1029,10 @@ async fn sync_produce(
 }
 
 fn sync_result(recipes: &[Recipe], produce: ProduceResult, produce_from_cache: bool) -> SyncResult {
-    let unanalyzed_count = recipes.iter().filter(|r| r.key_ingredients.is_empty()).count();
+    let unanalyzed_count = recipes
+        .iter()
+        .filter(|r| r.key_ingredients.is_empty() && !r.excluded)
+        .count();
     SyncResult {
         produce,
         produce_from_cache,
@@ -1054,7 +1074,10 @@ async fn sync_on_launch(
     recipes.sort_by(|a, b| a.title.cmp(&b.title));
     save_recipes_cache(&app, &recipes)?;
 
-    let unanalyzed_count = recipes.iter().filter(|r| r.key_ingredients.is_empty()).count();
+    let unanalyzed_count = recipes
+        .iter()
+        .filter(|r| r.key_ingredients.is_empty() && !r.excluded)
+        .count();
     let _ = app.emit(
         "status",
         if unanalyzed_count > 0 {
@@ -1078,9 +1101,16 @@ async fn full_resync(
     let (produce, produce_from_cache) = sync_produce(&app, &running).await?;
 
     let _ = app.emit("status", "Resyncing all recipes from Mela...");
-    let recipes = load_all_recipes(&mela_db_path())?;
+    let mut recipes = load_all_recipes(&mela_db_path())?;
     if recipes.is_empty() {
         return Err(format!("No recipes found in {}", mela_db_path().display()));
+    }
+    // Mela knows nothing about `excluded`, so a fresh read would silently
+    // un-exclude everything the user marked. Carry it over from the cache.
+    let cached = load_recipes_cache(&app).unwrap_or_default();
+    let excluded = excluded_ids(&cached);
+    for r in recipes.iter_mut() {
+        r.excluded = excluded.contains(r.id.as_str());
     }
     save_recipes_cache(&app, &recipes)?;
 
@@ -1107,10 +1137,15 @@ fn resync_recipe(app: tauri::AppHandle, id: String) -> Result<Recipe, String> {
     let mut image_stmt = prepare_image_stmt(&conn)?;
     let mut tags_stmt = prepare_tags_stmt(&conn)?;
     let external_dir = external_data_dir(&db_path);
-    let fresh = load_recipe(&conn, &mut image_stmt, &mut tags_stmt, &external_dir, *pk)?;
+    let mut fresh = load_recipe(&conn, &mut image_stmt, &mut tags_stmt, &external_dir, *pk)?;
 
     match recipes.iter().position(|r| r.id == id) {
-        Some(i) => recipes[i] = fresh.clone(),
+        Some(i) => {
+            // See full_resync: `excluded` is ours, not Mela's, so a re-read
+            // must not clear it.
+            fresh.excluded = recipes[i].excluded;
+            recipes[i] = fresh.clone();
+        }
         None => recipes.push(fresh.clone()),
     }
     save_recipes_cache(&app, &recipes)?;
@@ -1129,7 +1164,7 @@ async fn analyze_new_recipes(
         .ok_or_else(|| "No cached recipes — sync hasn't run yet".to_string())?;
     let pending: Vec<Recipe> = recipes
         .iter()
-        .filter(|r| r.key_ingredients.is_empty())
+        .filter(|r| r.key_ingredients.is_empty() && !r.excluded)
         .cloned()
         .collect();
     if pending.is_empty() {
@@ -1230,6 +1265,7 @@ fn match_recipes(
 
     let mut ranked: Vec<RankedRecipe> = recipes
         .into_iter()
+        .filter(|r| !r.excluded)
         .filter_map(|r| {
             let (rating, pick_matches, seasonal_matches) = rate_recipe(&r, &market, &seasonal);
             (rating > 0.0).then(|| RankedRecipe {
@@ -1307,6 +1343,25 @@ fn set_ingredient_name(
             }
         }
     }
+    save_recipes_cache(&app, &recipes)?;
+    Ok(recipes)
+}
+
+/// Marks a recipe as never-match (or un-marks it) — for recipes with no
+/// seasonal-produce story at all, like a vegan cheese sauce. Returns the
+/// updated cache so the frontend can re-derive its counts without a resync.
+#[tauri::command]
+fn set_excluded(
+    app: tauri::AppHandle,
+    id: String,
+    excluded: bool,
+) -> Result<Vec<Recipe>, String> {
+    let mut recipes = load_recipes_cache(&app)
+        .ok_or_else(|| "No cached recipes — sync hasn't run yet".to_string())?;
+    let Some(recipe) = recipes.iter_mut().find(|r| r.id == id) else {
+        return Err("Recipe not found in the local cache".to_string());
+    };
+    recipe.excluded = excluded;
     save_recipes_cache(&app, &recipes)?;
     Ok(recipes)
 }
@@ -1421,6 +1476,7 @@ mod tests {
             image: "data:image/jpeg;base64,abc".into(),
             tags: vec!["Salads".into()],
             key_ingredients: vec!["figs".into()],
+            excluded: true,
         }];
         let json = serde_json::to_string(&recipes).unwrap();
         let parsed: Vec<Recipe> = serde_json::from_str(&json).unwrap();
@@ -1436,6 +1492,25 @@ mod tests {
         assert_eq!(parsed[0].image, "data:image/jpeg;base64,abc");
         assert_eq!(parsed[0].tags, vec!["Salads".to_string()]);
         assert_eq!(parsed[0].key_ingredients, vec!["figs".to_string()]);
+        assert!(parsed[0].excluded);
+    }
+
+    // A recipes.json written before `excluded` existed must still load.
+    #[test]
+    fn recipe_without_excluded_field_defaults_to_included() {
+        let json = r#"[{"id":"a","title":"T","description":"","ingredients":[]}]"#;
+        let parsed: Vec<Recipe> = serde_json::from_str(json).unwrap();
+        assert!(!parsed[0].excluded);
+    }
+
+    #[test]
+    fn excluded_ids_carries_the_flag_across_a_mela_reread() {
+        let mut kept = recipe("keep", "Keeper", &["asparagus"]);
+        kept.excluded = true;
+        let cached = vec![kept, recipe("drop", "Dropper", &["fig"])];
+        let ids = excluded_ids(&cached);
+        assert!(ids.contains("keep"));
+        assert!(!ids.contains("drop"));
     }
 
     fn ing(display: &str, name: &str, pantry: bool) -> Ingredient {
@@ -1462,6 +1537,7 @@ mod tests {
             image: String::new(),
             tags: Vec::new(),
             key_ingredients: keys.iter().map(|k| k.to_string()).collect(),
+            excluded: false,
         }
     }
 
@@ -1720,6 +1796,7 @@ pub fn run() {
             list_recipes,
             seasonal_in_season,
             set_ingredient_name,
+            set_excluded,
             cancel,
             open_recipe,
             open_url

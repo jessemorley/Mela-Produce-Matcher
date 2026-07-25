@@ -11,6 +11,7 @@ function unfixedDisplays(recipes) {
   const displays = [];
   for (const recipe of recipes) {
     if (!recipe.key_ingredients?.length) continue; // covered by Sync Now instead
+    if (recipe.excluded) continue; // never matched, so nothing to fix for it
     for (const ing of recipe.ingredients || []) {
       if (!ing.name && !seen.has(ing.display)) {
         seen.add(ing.display);

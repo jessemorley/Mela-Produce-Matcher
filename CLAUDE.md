@@ -105,7 +105,16 @@ the user verifies UI/UX changes visually themselves in the running
    to the one being fixed, since Mela repeats common lines ("1 tsp salt")
    verbatim across many recipes — fixing it once shouldn't mean re-typing
    the same correction for every recipe that has it.
-5. `match_recipes` — **no Claude call.** Rates cached recipes locally with
+5. `set_excluded(id, excluded)` — the "Exclude" toggle in `RecipeDetail.jsx`'s
+   header. Sets `Recipe.excluded`, a user-marked "this recipe has no
+   seasonal-produce story" flag (a vegan cheese sauce). An excluded recipe is
+   skipped by `match_recipes`, by `analyze_new_recipes` (so excluding before
+   the first analysis also saves the Claude call), and by both
+   `unanalyzed_count` and `unfixed_ingredients`, so excluding clears it off
+   the Sync Now / Fix Now banners. Mela has no such field, so `full_resync`
+   and `resync_recipe` explicitly carry the flag over from the cache
+   (`excluded_ids`) rather than letting a fresh read reset it.
+6. `match_recipes` — **no Claude call.** Rates cached recipes locally with
    `rate_recipe` across **two layers**: the live market update (`fruit`+
    `vegetable`, "Dave's Picks") weighted `PICK_WEIGHT` (3), and a stable
    per-season produce table (`SEASONAL_PRODUCE`, filtered by
@@ -133,7 +142,7 @@ the user verifies UI/UX changes visually themselves in the running
    ("potato" != "sweet potato", "broccoli" != "broccolini"). Plain
    substring matching was the original rule and would rank a corned beef
    recipe as seasonal when corn is in season.
-6. `list_recipes` — returns the full local `recipes.json` as-is, for the
+7. `list_recipes` — returns the full local `recipes.json` as-is, for the
    frontend's "Saved Recipes" browse view (independent of any ranking).
 
 Only analysed recipes can ever match, since scoring reads `key_ingredients`

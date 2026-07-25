@@ -1,4 +1,4 @@
-import { ExternalLink, Clock, User, Heart, Check } from "lucide-react";
+import { ExternalLink, Clock, User, Heart, Check, Ban } from "lucide-react";
 
 const { invoke } = window.__TAURI__.core;
 
@@ -10,7 +10,7 @@ function inList(list, name) {
   });
 }
 
-export default function RecipeDetail({ recipe }) {
+export default function RecipeDetail({ recipe, onRecipesChange }) {
   const ingredients = recipe.ingredients || [];
   // Dave's Picks (live market update) take precedence over the seasonal
   // table when a key ingredient is in both, matching the backend's scoring.
@@ -96,6 +96,29 @@ export default function RecipeDetail({ recipe }) {
           </div>
         </div>
         <div className="shrink-0 flex items-center space-x-2">
+          <button
+            onClick={async () =>
+              onRecipesChange(
+                await invoke("set_excluded", {
+                  id: recipe.id,
+                  excluded: !recipe.excluded,
+                }),
+              )
+            }
+            title={
+              recipe.excluded
+                ? "Include this recipe in seasonal matching"
+                : "Never match this recipe against seasonal produce"
+            }
+            className={`flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium rounded-lg border transition-all ${
+              recipe.excluded
+                ? "border-slate-300 bg-slate-100 text-slate-600 hover:bg-slate-200"
+                : "border-slate-200 text-slate-500 hover:bg-slate-100"
+            }`}
+          >
+            <Ban className="w-3.5 h-3.5" />
+            <span>{recipe.excluded ? "Excluded" : "Exclude"}</span>
+          </button>
           <button
             onClick={() => invoke("open_recipe", { id: recipe.id })}
             className="flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium bg-emerald-500 text-white rounded-lg shadow-sm hover:bg-emerald-600 transition-all"

@@ -97,7 +97,10 @@ export default function App() {
   }, [rankedRecipes, allRecipes, activeRecipeId]);
 
   async function runMatch() {
-    setActiveRecipeId(null);
+    // Only reset the selection if the selected recipe is gone entirely;
+    // a recipe that merely dropped out of the ranked list (excluded, or a
+    // new week's produce) still resolves via the allRecipes fallback.
+    setActiveRecipeId((id) => (allRecipes.some((r) => r.id === id) ? id : null));
     try {
       setRankedRecipes(
         await invoke("match_recipes", {
@@ -115,7 +118,7 @@ export default function App() {
   // lines are covered by the Sync Now banner instead).
   function countUnfixed(recipes) {
     return recipes
-      .filter((r) => r.key_ingredients?.length > 0)
+      .filter((r) => r.key_ingredients?.length > 0 && !r.excluded)
       .reduce(
         (total, r) => total + (r.ingredients || []).filter((i) => !i.name).length,
         0,
@@ -125,6 +128,11 @@ export default function App() {
   function applyRecipes(recipes) {
     setAllRecipes(recipes);
     setUnfixedCount(countUnfixed(recipes));
+    // Mirrors sync_result()'s unanalyzed_count: excluding an unanalysed
+    // recipe takes it off the Sync Now banner without waiting for a resync.
+    setUnanalyzedCount(
+      recipes.filter((r) => !r.key_ingredients?.length && !r.excluded).length,
+    );
   }
 
   // "Sync Now": run the Claude key-ingredient analysis over recipes the
@@ -135,8 +143,7 @@ export default function App() {
     setBusy(true);
     try {
       await invoke("analyze_new_recipes");
-      applyRecipes((await invoke("list_recipes")) ?? []);
-      setUnanalyzedCount(0);
+      applyRecipes((await invoke("list_recipes")) ?? []); // recomputes unanalyzedCount
     } catch (err) {
       setStatus(err === "cancelled" ? "Cancelled." : `Error: ${err}`);
     } finally {
@@ -218,7 +225,7 @@ export default function App() {
               onBack={() => setShowArticle(false)}
             />
           ) : activeRecipe ? (
-            <RecipeDetail recipe={activeRecipe} />
+            <RecipeDetail recipe={activeRecipe} onRecipesChange={applyRecipes} />
           ) : (
             <div className="h-full flex flex-col items-center justify-center text-slate-400 text-sm gap-2">
               <Leaf className="w-8 h-8" />

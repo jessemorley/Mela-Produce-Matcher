@@ -253,8 +253,12 @@ function SavedRecipesView({ recipes, activeRecipeId, onSelectRecipe, searchQuery
   const filtered = recipes
     .filter((r) => r.title.toLowerCase().includes(searchQuery.toLowerCase()))
     .filter((r) => !selectedTag || r.tags?.includes(selectedTag));
-  const synced = filtered.filter((r) => r.key_ingredients?.length > 0);
-  const unsynced = filtered.filter((r) => !(r.key_ingredients?.length > 0));
+  // Excluded recipes are never analysed or matched, so they belong in
+  // neither bucket — own section, still browsable and un-excludable.
+  const active = filtered.filter((r) => !r.excluded);
+  const excluded = filtered.filter((r) => r.excluded);
+  const synced = active.filter((r) => r.key_ingredients?.length > 0);
+  const unsynced = active.filter((r) => !(r.key_ingredients?.length > 0));
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -282,6 +286,23 @@ function SavedRecipesView({ recipes, activeRecipeId, onSelectRecipe, searchQuery
           </h4>
           <div className="divide-y divide-slate-100">
             {unsynced.map((rec) => (
+              <SavedRecipeRow
+                key={rec.id}
+                rec={rec}
+                activeRecipeId={activeRecipeId}
+                onSelectRecipe={onSelectRecipe}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+      {excluded.length > 0 && (
+        <div>
+          <h4 className="px-3.5 pt-3 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Excluded ({excluded.length})
+          </h4>
+          <div className="divide-y divide-slate-100 opacity-60">
+            {excluded.map((rec) => (
               <SavedRecipeRow
                 key={rec.id}
                 rec={rec}
