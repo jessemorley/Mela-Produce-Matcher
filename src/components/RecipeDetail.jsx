@@ -1,4 +1,4 @@
-import { ExternalLink, Clock, Heart } from "lucide-react";
+import { ExternalLink, Clock, Heart, ChevronUp } from "lucide-react";
 import { ingredientIcon } from "./icons.js";
 
 const { invoke } = window.__TAURI__.core;
@@ -15,7 +15,14 @@ function inList(list, name) {
 // Season stack, where each recipe *is* a pane rather than sitting inside one.
 // Padding is identical either way, so a card is indistinguishable from the
 // detail pane; only the surface differs.
-export default function RecipeDetail({ recipe, surfaceClass = "" }) {
+// `onCollapse`, when given, adds a control to close this card back down —
+// used by the In Season stack, where one of several matches is open at a
+// time. The detail pane proper doesn't pass it: there's nothing to collapse
+// into there.
+// `ref` lands on the outer element so the In Season stack can scroll a
+// newly-expanded card to the top of the pane. React 19 passes ref as a plain
+// prop — no forwardRef needed.
+export default function RecipeDetail({ recipe, surfaceClass = "", onCollapse, ref }) {
   const ingredients = recipe.ingredients || [];
   // Dave's Picks (live market update) take precedence over the seasonal
   // table when a key ingredient is in both, matching the backend's scoring.
@@ -38,7 +45,7 @@ export default function RecipeDetail({ recipe, surfaceClass = "" }) {
   const pantryRows = indexed.filter(({ ingredient }) => ingredient.pantry);
 
   return (
-    <div className={`overflow-hidden pb-16 ${surfaceClass}`}>
+    <div ref={ref} className={`overflow-hidden pb-16 ${surfaceClass}`}>
       {/* Full-bleed banner. Mela's photos are bright, high-key and shot on
           white, so a scrim is doing real work here: without it the image ends
           in a hard bright line against the near-black pane, and the title
@@ -94,6 +101,16 @@ export default function RecipeDetail({ recipe, surfaceClass = "" }) {
             >
               Open in Mela <ExternalLink className="h-3.5 w-3.5" />
             </button>
+            {onCollapse && (
+              <button
+                onClick={onCollapse}
+                title="Collapse"
+                aria-label="Collapse"
+                className="flex items-center rounded-xl bg-text/8 px-2.5 py-1.5 text-text/50 hover:bg-text/12 hover:text-text/80"
+              >
+                <ChevronUp className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         </div>
 

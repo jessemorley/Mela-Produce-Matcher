@@ -1,5 +1,5 @@
-import { useEffect, useState, useMemo } from "react";
-import { Leaf, Ban, Undo2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState, useMemo } from "react";
+import { Leaf, Ban, Undo2, ChevronDown } from "lucide-react";
 import Sidebar from "./components/Sidebar.jsx";
 import RecipeList from "./components/RecipeList.jsx";
 import RecipeDetail from "./components/RecipeDetail.jsx";
@@ -7,6 +7,7 @@ import ArticleView from "./components/ArticleView.jsx";
 import FixNowQueue from "./components/FixNowQueue.jsx";
 import { ContextMenu, useContextMenu } from "./components/ContextMenu.jsx";
 import { produceIcon } from "./components/icons.js";
+import { resolveOpen } from "./openCard.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -297,9 +298,15 @@ export default function App() {
             pane exactly as it was. A produce selection renders its recipes as
             their own surfaces, so the slot drops its pane fill in that case
             only; otherwise cards would sit on a second background. */}
+        {/* Always rounded, even in the produce case where the pane has no
+            fill of its own: the corner radius has to clip the scrolling
+            cards, or they run to hard square edges at the top and bottom of
+            the pane as they scroll past. Only the background is conditional
+            — with produce selected the cards are the surfaces, so a pane fill
+            would sit behind them as a second background. */}
         <main
-          className={`relative min-w-[300px] flex-1 overflow-y-auto ${
-            selectedProduce && !showArticle ? "" : "rounded-2xl bg-pane"
+          className={`relative min-w-[300px] flex-1 overflow-y-auto rounded-2xl ${
+            selectedProduce && !showArticle ? "" : "bg-pane"
           }`}
         >
           {/* This pane is opaque, so it carries its own drag strip. It's
@@ -330,7 +337,11 @@ export default function App() {
             {showArticle ? (
               <ArticleView title={feedTitle} html={feedHtml} onBack={() => setShowArticle(false)} />
             ) : selectedProduce ? (
-              <ProducePane item={selectedProduce} recipes={produceRecipes} />
+              <ProducePane
+                key={selectedProduce.name}
+                item={selectedProduce}
+                recipes={produceRecipes}
+              />
             ) : activeRecipe ? (
               <RecipeDetail recipe={activeRecipe} />
             ) : (
@@ -386,10 +397,13 @@ function EmptyPane({ icon, body }) {
   );
 }
 
-// A produce selection renders its matching recipes as full recipe cards — the
-// same detail body as the pane, stacked. Both branches use flex-1 rather than
-// min-h-full: the wrapper in the detail pane has an indefinite height, so a
-// percentage would resolve to nothing. A lone card grows to fill the slot.
+// A produce selection renders its matching recipes as stacked recipe cards.
+// Both branches use flex-1 rather than min-h-full: the wrapper in the detail
+// pane has an indefinite height, so a percentage would resolve to nothing.
+//
+// Rendered with key={produce name} by the caller, so picking different
+// produce remounts this and resets which card is open — otherwise a
+// deliberate collapse would persist into the next selection.
 function ProducePane({ item, recipes }) {
   if (recipes.length === 0) {
     const Icon = produceIcon(item.type);
@@ -409,16 +423,91 @@ function ProducePane({ item, recipes }) {
     );
   }
 
-  const only = recipes.length === 1;
+  return <ProduceStack recipes={recipes} />;
+}
+
+// Stacked matches, one expanded at a time. A collapsed card is a short crop
+// of the same banner with the title over it, so the stack reads as a set of
+// photos rather than a list of bars; the open one renders the full detail
+// body. Defaults to the top match open, so the pane is never just a strip of
+// headers.
+function ProduceStack({ recipes }) {
+  // undefined = untouched, so default to the top match; null = deliberately
+  // collapsed, which has to stick or the collapse button would appear to do
+  // nothing on the first card.
+  const [openId, setOpenId] = useState(undefined);
+  const openRef = useRef(null);
+  // Only scroll for a card the user actually opened, not the one that starts
+  // open on mount — landing on the pane already scrolled would be wrong.
+  const userOpened = useRef(false);
+
+  const open = resolveOpen(recipes, openId);
+
+  // After the card expands, bring its top to the top of the pane. useLayout-
+  // Effect, not useEffect: it runs once the DOM has the expanded card's real
+  // height but before paint, so the scroll starts from the final layout.
+  useLayoutEffect(() => {
+    if (!userOpened.current || !openRef.current) return;
+    openRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [open]);
+
+  function expand(id) {
+    userOpened.current = true;
+    setOpenId(id);
+  }
+
   return (
     <div className="flex flex-1 flex-col gap-2.5">
-      {recipes.map((rec) => (
-        <RecipeDetail
-          key={rec.id}
-          recipe={rec}
-          surfaceClass={`rounded-2xl bg-pane ${only ? "flex flex-1 flex-col" : ""}`}
-        />
-      ))}
+      {recipes.map((rec) =>
+        rec.id === open ? (
+          <RecipeDetail
+            key={rec.id}
+            ref={openRef}
+            recipe={rec}
+            surfaceClass={`rounded-2xl bg-pane ${recipes.length === 1 ? "flex flex-1 flex-col" : ""}`}
+            onCollapse={recipes.length > 1 ? () => setOpenId(null) : undefined}
+          />
+        ) : (
+          <CollapsedRecipe key={rec.id} recipe={rec} onClick={() => expand(rec.id)} />
+        ),
+      )}
     </div>
   );
 }
+
+// Collapsed card: banner crop with the title over it. Falls back to a plain
+// bar when the recipe has no image — most don't (150 of 215 image rows in
+// Mela are external references, not inline data).
+function CollapsedRecipe({ recipe, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="group relative w-full shrink-0 overflow-hidden rounded-2xl bg-pane text-left"
+    >
+      {recipe.image && (
+        <>
+          <img
+            src={recipe.image}
+            alt=""
+            className="h-24 w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+          />
+          {/* Same scrim job as the full banner: Mela's photos are bright and
+              shot on white, so the title needs a footing to sit on. */}
+          <div className="absolute inset-0 bg-gradient-to-t from-pane via-pane/70 to-pane/20" />
+        </>
+      )}
+      <div className={`flex items-baseline gap-3 px-6 ${recipe.image ? "absolute inset-x-0 bottom-0 pb-4" : "py-4"}`}>
+        {typeof recipe.rating === "number" && (
+          <span className="shrink-0 text-[15px] font-medium tabular-nums text-match">
+            {Math.round(recipe.rating * 100)}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 truncate text-[15px] font-semibold tracking-tight text-text">
+          {recipe.title}
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-text/35 transition-colors group-hover:text-text/70" />
+      </div>
+    </button>
+  );
+}
+
