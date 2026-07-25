@@ -250,13 +250,13 @@ function ProduceView({ produce, seasonal, rankedRecipes, selectedProduce, onSele
             />
           ) : null}
         </span>
-        <span
-          className={`shrink-0 text-[10.5px] tabular-nums ${
-            cookable ? "text-text/40" : "text-text/20"
-          }`}
-        >
-          {cookable ? item.uses.length : "—"}
-        </span>
+        {/* No placeholder when nothing uses it — the dimmed name and icon
+            already carry that, and a column of dashes read as noise. */}
+        {cookable && (
+          <span className="shrink-0 text-[10.5px] tabular-nums text-text/40">
+            {item.uses.length}
+          </span>
+        )}
       </button>
     );
   };
