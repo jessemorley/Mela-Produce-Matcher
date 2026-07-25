@@ -7,6 +7,7 @@ import ArticleView from "./components/ArticleView.jsx";
 import FixNowQueue from "./components/FixNowQueue.jsx";
 import { ContextMenu, useContextMenu } from "./components/ContextMenu.jsx";
 import { produceIcon } from "./components/icons.js";
+import { useScrollbars } from "./useScrollbars.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -31,6 +32,7 @@ export default function App() {
   const [unfixedCount, setUnfixedCount] = useState(0);
   const [showFixNow, setShowFixNow] = useState(false);
   const [menu, openMenu, closeMenu] = useContextMenu();
+  useScrollbars(); // scrollbars stay invisible until you scroll
 
   // ONE selection drives the detail pane, whatever view made it — switching
   // nav browses, it doesn't select, so the pane holds until you pick something
