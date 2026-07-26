@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "tauri": "tauri",
+    "tauri:dev": "tauri dev --runner src-tauri/dev-runner.sh",
     "dev": "vite",
     "build": "vite build"
   },

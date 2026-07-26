@@ -303,6 +303,18 @@ fn load_all_recipes(db_path: &PathBuf, images_dir: &std::path::Path) -> Result<V
     Ok(recipes)
 }
 
+// Atom text is XML-escaped; the title is shown verbatim as plain text (the
+// content HTML goes through the frontend's DOMParser instead, which decodes
+// entities itself), so only the handful of entities feeds actually use need
+// unescaping here.
+fn decode_entities(s: &str) -> String {
+    s.replace("&apos;", "'")
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
 fn extract_tag(xml: &str, tag: &str) -> String {
     let open = format!("<{tag}");
     let close = format!("</{tag}>");
@@ -337,11 +349,59 @@ fn extract_link_href(entry_xml: &str) -> String {
     val.find('"').map(|end| val[..end].to_string()).unwrap_or_default()
 }
 
-/// Returns (title, stripped text, raw html, link href, atom entry id).
-/// The entry id (not the link) is what we key the produce cache on — it's
-/// the stable per-post identifier Atom guarantees, whereas the link is only
-/// kept around for the "read full article" UI affordance.
-fn fetch_latest_entry(feed_url: &str) -> Result<(String, String, String, String, String), String> {
+/// Every post's title starts "Dave's Market Update & Pick of the Week - ",
+/// which is true of every entry in the feed and so tells the reader nothing
+/// — trimmed here so both the current-post banner and the archive dropdown
+/// (both read straight off this) show just "<item> - <date>".
+fn strip_newsletter_prefix(title: &str) -> String {
+    let lower = title.to_lowercase();
+    match lower.find("pick of the week") {
+        Some(i) => title[i + "pick of the week".len()..]
+            .trim_start_matches([' ', '-'])
+            .to_string(),
+        None => title.to_string(),
+    }
+}
+
+/// (title, stripped text, raw html, link href, atom entry id) for one
+/// `<entry>...</entry>` span. The entry id (not the link) is what we key the
+/// produce cache on — it's the stable per-post identifier Atom guarantees,
+/// whereas the link is only kept around for the "read full article" UI
+/// affordance.
+fn parse_entry(entry_xml: &str) -> (String, String, String, String, String) {
+    let title = strip_newsletter_prefix(&decode_entities(&extract_tag(entry_xml, "title")));
+    let content_html = extract_tag(entry_xml, "content")
+        .trim_start_matches("<![CDATA[")
+        .trim_end_matches("]]>")
+        .to_string();
+    let link = extract_link_href(entry_xml);
+    let id = extract_tag(entry_xml, "id");
+    (title, strip_tags(&content_html), content_html, link, id)
+}
+
+/// Splits a raw Atom feed body into its `<entry>...</entry>` spans and parses
+/// each, most recent first (Atom's own order). Pure string work, no network —
+/// factored out of `fetch_all_entries` so the offset-walking loop has a unit
+/// test independent of a live feed fetch.
+fn parse_feed_entries(body: &str) -> Vec<(String, String, String, String, String)> {
+    let mut entries = Vec::new();
+    let mut pos = 0;
+    while let Some(start) = body[pos..].find("<entry").map(|i| pos + i) {
+        let end = body[start..]
+            .find("</entry>")
+            .map(|i| start + i + "</entry>".len())
+            .unwrap_or(body.len());
+        entries.push(parse_entry(&body[start..end]));
+        pos = end;
+    }
+    entries
+}
+
+/// Every `<entry>` in the feed, most recent first — the newsletter keeps
+/// roughly the last 30 posts in the feed, which is also all the history the
+/// archive picker needs, so no pagination/scraping past the feed itself is
+/// required.
+fn fetch_all_entries(feed_url: &str) -> Result<Vec<(String, String, String, String, String)>, String> {
     let body = ureq::get(feed_url)
         .set("User-Agent", "Mozilla/5.0")
         .call()
@@ -349,23 +409,11 @@ fn fetch_latest_entry(feed_url: &str) -> Result<(String, String, String, String,
         .into_string()
         .map_err(|e| e.to_string())?;
 
-    let Some(entry_start) = body.find("<entry") else {
+    let entries = parse_feed_entries(&body);
+    if entries.is_empty() {
         return Err(format!("no entries found in feed {feed_url}"));
-    };
-    let entry_end = body[entry_start..]
-        .find("</entry>")
-        .map(|i| entry_start + i)
-        .unwrap_or(body.len());
-    let entry_xml = &body[entry_start..entry_end];
-
-    let title = extract_tag(entry_xml, "title");
-    let content_html = extract_tag(entry_xml, "content")
-        .trim_start_matches("<![CDATA[")
-        .trim_end_matches("]]>")
-        .to_string();
-    let link = extract_link_href(entry_xml);
-    let id = extract_tag(entry_xml, "id");
-    Ok((title, strip_tags(&content_html), content_html, link, id))
+    }
+    Ok(entries)
 }
 
 fn build_produce_prompt(entry_title: &str, entry_text: &str) -> String {
@@ -1045,6 +1093,17 @@ struct ProduceCache {
     produce: ProduceResult,
 }
 
+/// One past newsletter post for the archive picker — same shape as the
+/// live-post fields of `ProduceResult`, minus the produce lists, which only
+/// matter for the *current* week's recipe matching.
+#[derive(Serialize, Deserialize, Clone)]
+struct ArchiveEntry {
+    entry_id: String,
+    feed_title: String,
+    feed_link: String,
+    feed_html: String,
+}
+
 fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
@@ -1056,6 +1115,10 @@ fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
 fn produce_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(app_data_dir(app)?.join("produce_cache.json"))
+}
+
+fn archive_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("archive_cache.json"))
 }
 
 fn recipes_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -1078,6 +1141,18 @@ fn load_produce_cache(app: &tauri::AppHandle) -> Option<ProduceCache> {
 fn save_produce_cache(app: &tauri::AppHandle, cache: &ProduceCache) -> Result<(), String> {
     let path = produce_cache_path(app)?;
     let json = serde_json::to_string_pretty(cache).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| e.to_string())
+}
+
+fn load_archive_cache(app: &tauri::AppHandle) -> Vec<ArchiveEntry> {
+    let Ok(path) = archive_cache_path(app) else { return Vec::new() };
+    let Ok(bytes) = std::fs::read(path) else { return Vec::new() };
+    serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+fn save_archive_cache(app: &tauri::AppHandle, entries: &[ArchiveEntry]) -> Result<(), String> {
+    let path = archive_cache_path(app)?;
+    let json = serde_json::to_string_pretty(entries).map_err(|e| e.to_string())?;
     std::fs::write(path, json).map_err(|e| e.to_string())
 }
 
@@ -1130,8 +1205,22 @@ async fn sync_produce(
     running: &State<'_, RunningChild>,
 ) -> Result<(ProduceResult, bool), String> {
     let _ = app.emit("status", format!("Checking {FEED_URL}..."));
-    let (entry_title, entry_text, entry_html, entry_link, entry_id) =
-        fetch_latest_entry(FEED_URL)?;
+    let entries = fetch_all_entries(FEED_URL)?;
+    let (entry_title, entry_text, entry_html, entry_link, entry_id) = entries[0].clone();
+
+    // The feed GET above already pulled the whole page of past posts, so the
+    // archive cache is refreshed for free every launch — no separate fetch,
+    // no separate "is this stale" check like the produce cache needs.
+    let archive: Vec<ArchiveEntry> = entries
+        .into_iter()
+        .map(|(feed_title, _, feed_html, feed_link, entry_id)| ArchiveEntry {
+            entry_id,
+            feed_title,
+            feed_link,
+            feed_html,
+        })
+        .collect();
+    let _ = save_archive_cache(app, &archive);
 
     let cached = load_produce_cache(app);
     let (produce, produce_from_cache) = match cached {
@@ -1468,6 +1557,14 @@ fn list_recipes(app: tauri::AppHandle) -> Result<Vec<Recipe>, String> {
     Ok(load_recipes_cache(&app).unwrap_or_default())
 }
 
+/// Past newsletter posts for the archive picker, most recent first — a pure
+/// cache read (populated by `sync_produce` on launch), so opening the picker
+/// never blocks on a feed fetch.
+#[tauri::command]
+fn list_archive(app: tauri::AppHandle) -> Vec<ArchiveEntry> {
+    load_archive_cache(&app)
+}
+
 #[derive(Serialize, Clone)]
 struct SeasonalInfo {
     season: &'static str,
@@ -1792,6 +1889,48 @@ mod tests {
         assert_eq!(keys, &vec!["asparagus", "tofu"]);
         assert_eq!(indexed, &vec![(0, "asparagus".to_string(), false), (1, "tofu".to_string(), true)]);
         assert_eq!(parsed[1].0, "def");
+    }
+
+    // The archive picker depends on every past post surviving the split, in
+    // feed order (newest first) — an off-by-one in the offset-walking loop
+    // would silently drop or duplicate an entry.
+    #[test]
+    fn parse_feed_entries_splits_every_entry_in_order() {
+        let body = r#"<feed>
+            <entry><title>Second post</title><id>tag:2</id>
+                <content type="html"><![CDATA[<p>second</p>]]></content>
+                <link href="https://example.com/2"/>
+            </entry>
+            <entry><title>First post</title><id>tag:1</id>
+                <content type="html"><![CDATA[<p>first</p>]]></content>
+                <link href="https://example.com/1"/>
+            </entry>
+        </feed>"#;
+        let entries = parse_feed_entries(body);
+        assert_eq!(entries.len(), 2);
+        let (title0, _, html0, link0, id0) = &entries[0];
+        assert_eq!(title0, "Second post");
+        assert_eq!(html0, "<p>second</p>");
+        assert_eq!(link0, "https://example.com/2");
+        assert_eq!(id0, "tag:2");
+        assert_eq!(entries[1].0, "First post");
+        assert_eq!(entries[1].4, "tag:1");
+    }
+
+    #[test]
+    fn strip_newsletter_prefix_leaves_only_item_and_date() {
+        assert_eq!(
+            strip_newsletter_prefix(
+                "Dave's Market Update & Pick of the Week - Imperfect Tangelos - Wednesday 22 July 2026"
+            ),
+            "Imperfect Tangelos - Wednesday 22 July 2026"
+        );
+        // A title with no "Pick of the Week" (the feed's own top-level title,
+        // not a post entry) passes through unchanged rather than mangled.
+        assert_eq!(
+            strip_newsletter_prefix("Harris Farm Markets - Dave's Market Update"),
+            "Harris Farm Markets - Dave's Market Update"
+        );
     }
 
     // A line naming two ingredients ("salt and pepper") must not be split —
@@ -2143,6 +2282,7 @@ pub fn run() {
             analyze_new_recipes,
             match_recipes,
             list_recipes,
+            list_archive,
             seasonal_in_season,
             set_ingredient_name,
             set_excluded,

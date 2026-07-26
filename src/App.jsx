@@ -18,6 +18,12 @@ export default function App() {
   const [status, setStatus] = useState("Starting...");
   const [busy, setBusy] = useState(true);
   const [selectedNav, setSelectedNav] = useState("matching"); // 'matching' | 'produce' | 'recipes'
+  // Switching nav is how you leave the article view — there's no dedicated
+  // Back button, so any other navigation dismisses it.
+  const selectNav = (nav) => {
+    setShowArticle(false);
+    setSelectedNav(nav);
+  };
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedTag, setSelectedTag] = useState(null);
   const [showArticle, setShowArticle] = useState(false);
@@ -252,7 +258,7 @@ export default function App() {
       <div className="shell relative z-10 flex min-h-0 flex-1 gap-2.5 p-2.5">
         <Sidebar
           selectedNav={selectedNav}
-          onSelectNav={setSelectedNav}
+          onSelectNav={selectNav}
           counts={counts}
           busy={busy}
           status={status}
@@ -265,7 +271,7 @@ export default function App() {
 
         <RecipeList
           selectedNav={selectedNav}
-          onSelectNav={setSelectedNav}
+          onSelectNav={selectNav}
           counts={counts}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -276,11 +282,15 @@ export default function App() {
           rankedRecipes={rankedRecipes}
           allRecipes={allRecipes}
           activeRecipeId={activeRecipeId}
-          onSelectRecipe={(id) => setSelection({ kind: "recipe", id })}
+          onSelectRecipe={(id) => {
+            setShowArticle(false);
+            setSelection({ kind: "recipe", id });
+          }}
           selectedProduce={selectedProduce}
-          onSelectProduce={(item) =>
-            setSelection(item ? { kind: "produce", item } : { kind: "none" })
-          }
+          onSelectProduce={(item) => {
+            setShowArticle(false);
+            setSelection(item ? { kind: "produce", item } : { kind: "none" });
+          }}
           onContextMenu={openMenu}
           unanalyzedCount={unanalyzedCount}
           onSyncNow={analyzeNew}
@@ -333,7 +343,7 @@ export default function App() {
               to the wrapper's full height via align-items: stretch. */}
           <div className="relative z-10 flex min-h-full flex-col">
             {showArticle ? (
-              <ArticleView title={feedTitle} html={feedHtml} onBack={() => setShowArticle(false)} />
+              <ArticleView title={feedTitle} html={feedHtml} />
             ) : selectedProduce ? (
               <ProducePane
                 key={selectedProduce.name}

@@ -23,7 +23,12 @@ development happens.
 
 Run from repo root unless noted:
 
-- `npm run tauri dev` — start the app in dev mode (Vite dev server + hot-reloads `src/`)
+- `npm run tauri:dev` — start the app in dev mode (Vite dev server + hot-reloads
+  `src/`). Runs through `src-tauri/dev-runner.sh` rather than plain `tauri dev`
+  so the compiled binary gets ad-hoc codesigned before each launch — the raw
+  `cargo build` output `tauri dev` runs otherwise is unsigned, so macOS can't
+  remember TCC grants (e.g. the Automation prompt for opening `mela://` links)
+  across launches and reprompts every time.
 - `npm run tauri build` — production build (runs `vite build` then bundles)
 - `npm run dev` / `npm run build` — just the frontend, without launching Tauri
 - `cd src-tauri && cargo check` — fast Rust typecheck without a full build
@@ -145,6 +150,13 @@ the user verifies UI/UX changes visually themselves in the running
    recipe as seasonal when corn is in season.
 7. `list_recipes` — returns the full local `recipes.json` as-is, for the
    frontend's "All Recipes" browse view (independent of any ranking).
+8. `list_archive` — past newsletter posts for `ArticleView.jsx`'s "Past
+   updates" dropdown, read straight off `archive_cache.json` with no network
+   call. The Atom feed itself carries roughly the last 30 posts, so
+   `sync_produce`'s one feed GET on every launch (see #1) also refreshes this
+   cache unconditionally as a side effect — no separate fetch or staleness
+   check like the produce cache needs, since it's just parsed and saved every
+   time regardless of whether the current post changed.
 
 Only analysed recipes can ever match, since scoring reads `key_ingredients`
 exclusively. A fresh install shows zero matches until "Sync Now" runs.
@@ -291,10 +303,50 @@ viewport one: the same body renders as a narrow stacked card inside the In
 Season pane while the window is wide, so a viewport breakpoint would miss it.
 Rows show `ingredient.name` (capitalised via CSS, not string mutation) with
 the raw `display` line as the tooltip. `ArticleView.jsx`
-is a sanitized in-app reader for the full newsletter post (`sanitizeArticle`
-strips scripts/styles/forms/dangerous attributes), toggled in place of the
-detail pane; external links inside it route through `open_url` to the
+is a sanitized in-app reader for the full newsletter post, toggled in place
+of the detail pane; external links inside it route through `open_url` to the
 system browser rather than navigating the webview.
+
+The newsletter's own markup is a Shopify page composed by hand, not clean
+editorial HTML, so `sanitizeArticle` does more than strip active content
+(scripts/styles/forms/dangerous attributes): the first heading's image is
+pulled out and rendered as a full-bleed banner (the same treatment as a
+recipe's cover photo in `RecipeDetail.jsx`) rather than sitting inline; the
+"buy the box" CTA (heading + product photo + illustration disclaimer) is
+dropped entirely by matching its heading text and removing every sibling up
+to the next heading; any promo block containing an image is collapsed to its
+links only — multi-link blocks (the "Recipe Inspiration" recipe grid) become
+a plain `.link-row` list, single-link blocks (standalone product plugs) are
+dropped outright, since one link with no siblings is promotional rather than
+something the post is "about"; every repeated "- David Harris" byline
+paragraph is stripped alongside the empty `<p> </p>` editor spacer paragraphs
+that were otherwise responsible for the newsletter's oversized gaps between
+sections. Both the post's own `<h1>`/`<h2>` section breaks and the eyebrow
+`<h3>`s ("In Veg") get folded to the same `<h3>` style so section breaks read
+consistently regardless of which heading level the newsletter used.
+
+The post *title* — shown in the banner and in the archive dropdown below —
+gets its own trim on the Rust side: `strip_newsletter_prefix` cuts everything
+through "Pick of the Week - ", since that phrase is identical on every post
+and tells the reader nothing the other posts in the dropdown don't already
+say. "Dave's Market Update & Pick of the Week - Imperfect Tangelos -
+Wednesday 22 July 2026" becomes "Imperfect Tangelos - Wednesday 22 July
+2026". This runs inside `parse_entry`, the single per-`<entry>` parse both
+the current post and every archive entry go through, so the two can't drift.
+
+**Past updates are browsable, not just the current post.** The Atom feed
+itself carries roughly the last 30 posts, so no pagination or scraping beyond
+the feed is needed. `parse_feed_entries` splits the feed body into every
+`<entry>...</entry>` span (most recent first, matching Atom's own order) and
+`sync_produce`'s one feed GET on every launch (see `sync_on_launch` above)
+writes the full list to `archive_cache.json`, unconditionally — unlike the
+produce cache, there's no staleness check, since parsing and saving the whole
+page is already cheap and happens every launch regardless of whether the
+current post changed. `list_archive` is a pure cache read (no network),
+backing the "Past updates" dropdown next to the title in `ArticleView.jsx`:
+opening it lazily fetches the list once, and picking an entry swaps its
+title/HTML in locally rather than the current post's own props, so returning
+to "this week" needs no re-fetch.
 
 `FixNowQueue.jsx` is a modal queue over every unfixed ingredient
 (`name: ""`) belonging to an *analysed* recipe (an unanalysed recipe's
