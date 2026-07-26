@@ -778,9 +778,10 @@ const SUPPORTING_WEIGHT: u32 = 1;
 // What an *unmatched* supporting ingredient costs the denominator. Below
 // PICK_WEIGHT on purpose: garlic is in 109 of 160 recipes here and has never
 // been a market pick, so charging it a full slot taxed every savoury recipe
-// for having aromatics. At 2 it still dilutes — fresh garlic is produce and
-// should pull its weight when out of season — just less than it earns.
-const SUPPORTING_COST: u32 = 2;
+// for having aromatics. At 1 it still dilutes a little — fresh garlic is
+// produce and should pull its weight when out of season — just barely
+// enough to separate ties without meaningfully taxing aromatics.
+const SUPPORTING_COST: u32 = 1;
 
 /// One in-season hit: the recipe's own ingredient name and the produce name
 /// it matched. Both are kept because they come from different vocabularies
@@ -2157,14 +2158,15 @@ mod tests {
         ];
 
         // Cucumber alone no longer buys a perfect score: the three
-        // supporting produce lines are in the denominator now.
+        // supporting produce lines are in the denominator now, at a reduced
+        // cost so they dilute a little without dominating.
         let (cucumber_only, ..) = rate_recipe(&salad, &["cucumber".to_string()], &[]);
         assert!(
             cucumber_only < 1.0,
             "one key match shouldn't rate 100% with 3 unmatched produce lines, got {cucumber_only}"
         );
-        // cucumber 3*3=9 over 9 + three supporting slots at 2 = 15.
-        assert!((cucumber_only - 9.0 / 15.0).abs() < 1e-6, "got {cucumber_only}");
+        // cucumber 3*3=9 over 9 + three supporting slots at 1 = 12.
+        assert!((cucumber_only - 9.0 / 12.0).abs() < 1e-6, "got {cucumber_only}");
 
         // ...and supporting produce alone rates lower than the defining one.
         let (supporting_only, _, seasonal) = rate_recipe(
