@@ -277,7 +277,7 @@ function ProduceView({ produce, seasonal, rankedRecipes, selectedProduce, onSele
       <div className="flex-1 overflow-y-auto px-3 pb-3">
         {/* Both section headings share the tiles' green — the wording is what
             separates the layers now that neither column is red. */}
-        <p className="px-2 pb-2 text-[9.5px] uppercase tracking-[0.18em] text-match">
+        <p className="px-2 pb-2 text-[11px] tracking-[0.02em] text-match">
           Dave's Picks
         </p>
         <div className="space-y-1">
@@ -291,8 +291,8 @@ function ProduceView({ produce, seasonal, rankedRecipes, selectedProduce, onSele
 
         {seasonal.season && (
           <>
-            <p className="px-2 pb-2 pt-6 text-[9.5px] uppercase tracking-[0.18em] text-match">
-              Also in {seasonal.season.toLowerCase()}
+            <p className="px-2 pb-2 pt-6 text-[11px] tracking-[0.02em] text-match">
+              Also in {seasonal.season}
             </p>
             <div className="space-y-1">
               {seasonTiles.map((item) => (
@@ -388,7 +388,7 @@ function SavedRecipesView({
   const Section = ({ title, rows, dim }) =>
     rows.length > 0 && (
       <>
-        <p className="px-3 pb-2 pt-5 text-[9.5px] uppercase tracking-[0.18em] text-text/32">
+        <p className="px-3 pb-2 pt-5 text-[11px] font-medium tracking-[0.02em] text-text/40">
           {title} · {rows.length}
         </p>
         {rows.map((rec) => (

@@ -85,7 +85,7 @@ export default function Sidebar({
 
       {categories.length > 0 && (
         <div className="mt-8 flex min-h-0 flex-1 flex-col px-2.5">
-          <p className="px-3 pb-2 text-[9.5px] uppercase tracking-[0.18em] text-text/32">
+          <p className="px-3 pb-2 text-[11px] font-medium tracking-[0.02em] text-text/40">
             Categories
           </p>
           <div className="min-h-0 overflow-y-auto">

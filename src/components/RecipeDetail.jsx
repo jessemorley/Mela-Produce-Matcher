@@ -137,9 +137,6 @@ export default function RecipeDetail({
             season". An icon only on a match conflated the two. */}
         {recipe.key_ingredients?.length > 0 && (
           <div className="mt-8">
-            <p className="mb-3 text-[9.5px] uppercase tracking-[0.18em] text-text/32">
-              Built around
-            </p>
             <div className="flex flex-wrap gap-1.5">
               {recipe.key_ingredients.map((k) => {
                 const on = hit(k);
@@ -202,7 +199,7 @@ export default function RecipeDetail({
 function Col({ title, rows, hit, isPick, isFeatured, isPickOfWeek }) {
   return (
     <div>
-      <p className="mb-3 text-[9.5px] uppercase tracking-[0.18em] text-text/32">{title}</p>
+      <p className="mb-3 text-[11px] font-medium tracking-[0.02em] text-text/40">{title}</p>
       <div className="space-y-0.5">
         {rows.map(({ ingredient, index }) => (
           <div

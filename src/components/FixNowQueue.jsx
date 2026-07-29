@@ -115,7 +115,7 @@ export default function FixNowQueue({ recipes, onClose, onRecipesChange }) {
         </div>
 
         <div className="mt-7">
-          <p className="mb-3 text-[9.5px] uppercase tracking-[0.18em] text-text/32">Name</p>
+          <p className="mb-3 text-[11px] font-medium tracking-[0.02em] text-text/40">Name</p>
           <input
             autoFocus
             type="text"
@@ -134,7 +134,7 @@ export default function FixNowQueue({ recipes, onClose, onRecipesChange }) {
         </div>
 
         <div className="mt-6">
-          <p className="mb-3 text-[9.5px] uppercase tracking-[0.18em] text-text/32">
+          <p className="mb-3 text-[11px] font-medium tracking-[0.02em] text-text/40">
             Already in your collection
           </p>
           <div className="space-y-0.5">
