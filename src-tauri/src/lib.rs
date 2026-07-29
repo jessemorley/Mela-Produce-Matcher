@@ -1,19 +1,19 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{Emitter, Manager, State};
 use tauri_plugin_opener::OpenerExt;
 
 const FEED_URL: &str = "https://www.harrisfarm.com.au/blogs/daves-market-update.atom";
-const CLAUDE_MODEL: &str = "sonnet";
+const CLAUDE_MODEL: &str = "claude-sonnet-5";
 const CANCELLED: &str = "cancelled";
 
 #[derive(Default)]
-struct RunningChild(Mutex<Option<u32>>);
+struct RunningChild(Mutex<Option<std::sync::Arc<AtomicBool>>>);
 
 // One ingredient line. `name`/`pantry` are LLM-produced by the key-ingredient
 // analysis call and empty/false until then; `name: ""` means "not analysed
@@ -949,75 +949,65 @@ fn diff_recipe_ids(mela_ids: &[(i64, String)], cached: &[Recipe]) -> (Vec<i64>, 
     (new_pks, kept)
 }
 
-/// Runs `claude -p` with streaming output. Each completed line of the final
-/// answer is passed to `on_line` as it arrives; the full answer is returned
-/// at the end for callers (like the produce-extraction step) that just want
-/// the whole result rather than a running stream.
+/// Calls the Claude API (Messages endpoint, SSE streaming) in place of the
+/// `claude` CLI, now that this app can no longer ride a Pro subscription.
+/// Each completed line of the response text is passed to `on_line` as it
+/// arrives; the full answer is returned at the end for callers (like the
+/// produce-extraction step) that just want the whole result.
 fn run_claude(
+    app: &tauri::AppHandle,
     prompt: &str,
     running: &RunningChild,
     mut on_line: impl FnMut(&str),
 ) -> Result<String, String> {
-    let mut child = Command::new("claude")
-        .args([
-            "-p",
-            "--model",
-            CLAUDE_MODEL,
-            // Default effort spends ~20s deliberating before the first
-            // token (measured via ttft_ms on this app's real batch
-            // prompts) even though the task is pure extraction/classification,
-            // not reasoning. low cuts that to ~1-2s with no quality drop
-            // observed on this prompt shape.
-            "--effort",
-            "low",
-            // The process inherits this app's own working directory, which
-            // is inside a Claude Code project — without this, the CLI loads
-            // ~/.claude's user-level settings (including any globally
-            // enabled plugins) and can inject an unrelated system prompt via
-            // a SessionStart hook, which has been observed to break the
-            // rigid id:/key:/N=>name=>kind output format this call depends
-            // on. Loading no settings sources keeps this call a clean,
-            // isolated completion.
-            "--setting-sources",
-            "",
-            "--output-format",
-            "stream-json",
-            "--include-partial-messages",
-            "--verbose",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to launch claude CLI: {e}"))?;
+    let api_key = resolve_api_key(app)?;
 
-    *running.0.lock().unwrap() = Some(child.id());
-    let result = run_claude_inner(&mut child, prompt, &mut on_line);
+    let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+    *running.0.lock().unwrap() = Some(cancelled.clone());
+    let result = run_claude_inner(&api_key, prompt, &cancelled, &mut on_line);
     *running.0.lock().unwrap() = None;
     result
 }
 
 fn run_claude_inner(
-    child: &mut std::process::Child,
+    api_key: &str,
     prompt: &str,
+    cancelled: &AtomicBool,
     on_line: &mut impl FnMut(&str),
 ) -> Result<String, String> {
-    child
-        .stdin
-        .take()
-        .expect("stdin piped")
-        .write_all(prompt.as_bytes())
-        .map_err(|e| e.to_string())?;
+    let body = serde_json::json!({
+        "model": CLAUDE_MODEL,
+        "max_tokens": 8000,
+        "stream": true,
+        // Pure extraction/classification, not reasoning — low effort cuts
+        // time-to-first-token with no quality drop observed on this prompt
+        // shape, matching the CLI's `--effort low`.
+        "output_config": { "effort": "low" },
+        "messages": [{ "role": "user", "content": prompt }],
+    });
 
-    let stdout = child.stdout.take().expect("stdout piped");
+    let resp = ureq::post("https://api.anthropic.com/v1/messages")
+        .set("x-api-key", api_key)
+        .set("anthropic-version", "2023-06-01")
+        .set("content-type", "application/json")
+        .send_string(&body.to_string())
+        .map_err(|e| format!("Claude API request failed: {e}"))?;
+
+    let reader = resp.into_reader();
     let mut line_buf = String::new();
     let mut full_answer = String::new();
-    for line in BufReader::new(stdout).lines() {
+    for line in BufReader::new(reader).lines() {
+        if cancelled.load(Ordering::SeqCst) {
+            return Err(CANCELLED.to_string());
+        }
         let line = line.map_err(|e| e.to_string())?;
-        let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
+        let Some(data) = line.strip_prefix("data: ") else {
             continue;
         };
-        if let Some(delta) = event["event"]["delta"]["text"].as_str() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(data) else {
+            continue;
+        };
+        if let Some(delta) = event["delta"]["text"].as_str() {
             full_answer.push_str(delta);
             line_buf.push_str(delta);
             while let Some(pos) = line_buf.find('\n') {
@@ -1027,41 +1017,18 @@ fn run_claude_inner(
                     on_line(finished_line);
                 }
             }
+        } else if event["type"] == "error" {
+            let msg = event["error"]["message"]
+                .as_str()
+                .unwrap_or("unknown error");
+            return Err(format!("Claude API error: {msg}"));
         }
     }
     if !line_buf.trim().is_empty() {
         on_line(line_buf.trim());
     }
 
-    let status = child.wait().map_err(|e| e.to_string())?;
-    if !status.success() {
-        if is_kill_signal(&status) {
-            return Err(CANCELLED.to_string());
-        }
-        let mut stderr_text = String::new();
-        if let Some(mut stderr) = child.stderr.take() {
-            use std::io::Read;
-            let _ = stderr.read_to_string(&mut stderr_text);
-        }
-        return Err(format!(
-            "claude CLI failed ({}): {}",
-            status,
-            stderr_text.trim()
-        ));
-    }
-
     Ok(full_answer)
-}
-
-#[cfg(unix)]
-fn is_kill_signal(status: &std::process::ExitStatus) -> bool {
-    use std::os::unix::process::ExitStatusExt;
-    status.signal() == Some(9)
-}
-
-#[cfg(not(unix))]
-fn is_kill_signal(_status: &std::process::ExitStatus) -> bool {
-    false
 }
 
 fn parse_produce_line(answer: &str, label: &str) -> Vec<String> {
@@ -1103,6 +1070,39 @@ struct ArchiveEntry {
     feed_title: String,
     feed_link: String,
     feed_html: String,
+}
+
+fn api_key_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_dir(app)?.join("api_key.txt"))
+}
+
+/// A GUI app launched from Finder/Dock (as opposed to `npm run tauri:dev`
+/// from a terminal) does not inherit shell env vars, so `ANTHROPIC_API_KEY`
+/// set in a shell profile is invisible to it. The env var is checked first
+/// as a dev convenience; the file in the app data dir is what the built
+/// app actually relies on.
+fn resolve_api_key(app: &tauri::AppHandle) -> Result<String, String> {
+    if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+        if !key.is_empty() {
+            return Ok(key);
+        }
+    }
+    let path = api_key_path(app)?;
+    std::fs::read_to_string(&path)
+        .map(|s| s.trim().to_string())
+        .map_err(|_| {
+            format!(
+                "No Anthropic API key found. Set ANTHROPIC_API_KEY or write your key to {}",
+                path.display()
+            )
+        })
+        .and_then(|key| {
+            if key.is_empty() {
+                Err(format!("{} is empty", path.display()))
+            } else {
+                Ok(key)
+            }
+        })
 }
 
 fn app_data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -1233,7 +1233,7 @@ async fn sync_produce(
             let _ = app.emit("status", format!("Latest post: {entry_title}"));
             let _ = app.emit("status", "Identifying in-season produce...");
             let produce_prompt = build_produce_prompt(&entry_title, &entry_text);
-            let produce_answer = run_claude(&produce_prompt, running, |_| {})?;
+            let produce_answer = run_claude(app, &produce_prompt, running, |_| {})?;
             let fruit = parse_produce_line(&produce_answer, "Fruit");
             let vegetable = parse_produce_line(&produce_answer, "Vegetable");
             let pick = parse_produce_line(&produce_answer, "Pick of the week");
@@ -1445,7 +1445,7 @@ async fn analyze_new_recipes(
         .collect();
     let total = pending.len();
     let mut seen = 0;
-    let answer = run_claude(&build_key_ingredient_prompt(&pending), &running, |line| {
+    let answer = run_claude(&app, &build_key_ingredient_prompt(&pending), &running, |line| {
         // Each recipe block starts with its "id:" line as soon as it
         // streams back, so this fires once per recipe in the batch, in
         // order — real-time per-recipe progress without splitting the call
@@ -1641,11 +1641,8 @@ fn set_excluded(
 
 #[tauri::command]
 fn cancel(running: State<'_, RunningChild>) -> Result<(), String> {
-    if let Some(pid) = *running.0.lock().unwrap() {
-        Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .status()
-            .map_err(|e| e.to_string())?;
+    if let Some(flag) = running.0.lock().unwrap().as_ref() {
+        flag.store(true, Ordering::SeqCst);
     }
     Ok(())
 }

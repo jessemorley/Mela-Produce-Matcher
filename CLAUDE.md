@@ -6,11 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Tauri desktop app that suggests recipes from a local Mela cookbook app
 based on what produce is in season, per the Harris Farm "Dave's Market
-Update" newsletter (a hardcoded Shopify Atom feed). It shells out to the
-`claude` CLI (not the API) to do the produce extraction and per-recipe
-key-ingredient analysis (ranking itself is local, no LLM),
-so it rides the user's Claude Code subscription rather than metering API
-calls.
+Update" newsletter (a hardcoded Shopify Atom feed). It calls the Claude
+API directly (Messages endpoint, SSE streaming) to do the produce
+extraction and per-recipe key-ingredient analysis (ranking itself is
+local, no LLM), metered by API credits via `ANTHROPIC_API_KEY` rather than
+riding a Claude Pro/Code subscription.
 
 `suggest.py` at the repo root is the original standalone CLI prototype this
 app grew out of. It duplicates the same read-Mela / fetch-feed / ask-Claude
@@ -226,33 +226,36 @@ and render as blank image slots. Nothing migrates them — this is a
 single-user app and that cache is already converted. Deleting `recipes.json`
 (and `images/`) forces a clean rebuild if one ever turns up.
 
-**Claude invocation** (`run_claude` / `run_claude_inner`) always shells out
-to the `claude` CLI with `--output-format stream-json
---include-partial-messages`, streaming parsed text deltas back line-by-line
-through a callback. `analyze_new_recipes` is the one caller that uses this
-for something beyond the final answer — see above — produce extraction
-still passes a no-op callback. Two flags matter beyond the streaming
-plumbing:
-- `--effort low`. Default effort was observed (via `ttft_ms` on this app's
-  real batch prompts) spending up to ~20s composing a response before its
-  first token, on a task that's pure extraction/classification, not
-  reasoning — `low` cuts that to ~1-2s with no quality drop seen on this
-  prompt shape.
-- `--setting-sources ""`. The spawned process inherits this app's own
-  working directory, which sits inside a Claude Code project — without
-  this flag the CLI loads `~/.claude`'s user-level settings, including
-  whatever plugins happen to be globally enabled, and a `SessionStart` hook
-  from one was observed injecting an unrelated system prompt that broke
-  the model's adherence to the rigid `id:`/`key:`/`N => name => kind`
-  output format entirely. Loading no settings sources keeps every call a
-  clean, isolated completion regardless of what's configured for
-  interactive use on the machine running the app.
+**Claude invocation** (`run_claude` / `run_claude_inner`) POSTs to
+`https://api.anthropic.com/v1/messages` via `ureq` with `"stream": true`,
+reading the `data: ` SSE lines and forwarding `delta.text` chunks
+line-by-line through a callback exactly as the old CLI-streaming version
+did — both call sites (`analyze_new_recipes`'s per-recipe progress parsing,
+`sync_produce`'s no-op callback) needed no changes when this swapped from a
+CLI shellout. Model is `claude-sonnet-5`; `output_config.effort: "low"`
+matches the old `--effort low` — this is pure extraction/classification,
+not reasoning, so low effort loses no quality on this prompt shape at much
+lower latency. `resolve_api_key` checks `ANTHROPIC_API_KEY` in the
+environment first (only reachable via `npm run tauri:dev`, since that runs
+through `dev-runner.sh`'s `exec` from a terminal), then falls back to a
+plaintext key file at `<app data dir>/api_key.txt` — the production `.app`
+launched from Finder/Dock inherits no shell env vars, so the file is what
+it actually relies on. `run_claude` errors immediately (naming the
+expected file path) if neither is present, rather than reaching the
+network. There is no CLI-settings
+equivalent to worry about (the `--setting-sources ""` /
+`SessionStart`-hook problem was specific to shelling out to the `claude`
+CLI from inside a Claude Code project directory) since a raw API call has
+no local settings to inherit.
 
-The child's PID is tracked in `RunningChild` (shared Tauri state) for the
-whole call so the `cancel` command can `kill -9` it; a SIGKILL exit is
-distinguished from a genuine CLI failure (`is_kill_signal`, unix-only) and
-surfaced to the frontend as the sentinel error string `"cancelled"` rather
-than a real error.
+Cancellation no longer kills a child process — there is none. `RunningChild`
+holds a shared `Arc<AtomicBool>` cancel flag instead of a PID; `cancel` sets
+it, and the SSE read loop in `run_claude_inner` checks it between lines,
+returning the sentinel error string `"cancelled"` (same string the frontend
+already expected) rather than a real error. This is cooperative, not
+preemptive — a check between streamed lines, not a hard abort — but SSE
+lines arrive frequently enough in practice that cancellation still feels
+immediate.
 
 **Frontend** (`src/App.jsx` + `src/components/`) listens for two events —
 `status` (free-text progress) and `produce` (`{fruit, vegetable, pick,
