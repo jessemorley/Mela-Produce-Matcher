@@ -987,20 +987,27 @@ fn rate_recipe(
     for (weight, cost, name) in weighted {
         max += cost;
         if let Some(p) = market.iter().find(|p| produce_matches(p, name)) {
-            score += weight * PICK_WEIGHT;
+            // Capped at `cost`: a key ingredient's cost already equals its
+            // max earn (self-consistent), but a supporting slot earns more
+            // than it costs (see SUPPORTING_COST), so an uncapped market hit
+            // (weight * PICK_WEIGHT) on one aromatic could outscore several
+            // other slots combined — one lemon-juice line out-rating a
+            // recipe's actual unmatched key ingredients. A supporting hit
+            // should lift a rating, never single-handedly cover for misses
+            // elsewhere.
+            score += (weight * PICK_WEIGHT).min(cost);
             market_matches.push(Match::new(name, p));
         } else if let Some(p) = seasonal.iter().find(|p| produce_matches(p, name)) {
-            score += weight * SEASONAL_WEIGHT;
+            score += (weight * SEASONAL_WEIGHT).min(cost);
             seasonal_matches.push(Match::new(name, p));
         }
     }
-    // Supporting produce earns more than its slot costs, so an all-supporting,
-    // all-picks recipe can outscore its own denominator. Clamped rather than
-    // rebalanced: the alternative is charging aromatics full price again.
+    // Each slot's earn is capped at its own cost above, so score can never
+    // exceed max here — no final clamp needed.
     let rating = if max == 0 {
         0.0
     } else {
-        (score as f32 / max as f32).min(1.0)
+        score as f32 / max as f32
     };
     (rating, market_matches, seasonal_matches)
 }
@@ -2454,6 +2461,34 @@ mod tests {
         let market = vec!["garlic".to_string(), "onion".to_string()];
         let (rating, ..) = rate_recipe(&r, &market, &[]);
         assert_eq!(rating, 1.0, "6/4 must clamp, not report 150%");
+    }
+
+    // Regression: a single supporting ingredient hitting the market layer
+    // (weight * PICK_WEIGHT = 3) must not outscore several other unmatched
+    // slots combined and drag the whole recipe to 100% on its own — the
+    // "Mediterranean-Inspired Orzo Pasta Salad" bug, where "lemon juice"
+    // and "lemon zest" matching this week's lemon pick rated the recipe
+    // 100% despite its actual cherry-tomato and bell-pepper lines missing
+    // entirely.
+    #[test]
+    fn one_market_supporting_hit_cannot_cover_for_other_misses() {
+        let mut r = recipe("a", "Orzo Salad", &["orzo", "olives", "artichoke"]);
+        r.ingredients = vec![
+            ing("orzo", "orzo", true), // all 3 key ingredients pantry: no key slots
+            ing("olives", "olives", true),
+            ing("artichoke", "artichoke", true),
+            ing("cherry tomatoes", "cherry tomatoes", false), // misses
+            ing("bell pepper", "bell pepper", false),         // misses
+            ing("red onion", "red onion", false),             // misses
+            ing("lemon juice", "lemon juice", false),         // hits market
+        ];
+        let market = vec!["lemon".to_string()];
+        let (rating, ..) = rate_recipe(&r, &market, &[]);
+        assert!(
+            rating < 0.5,
+            "one market hit on a supporting ingredient rated {rating}, \
+             should not cover for 3 other unmatched supporting slots"
+        );
     }
 
     #[test]
