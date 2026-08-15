@@ -566,6 +566,13 @@ fn parse_key_ingredient_lines(
 ///   time so the tiles, chips and detail pane read consistently, rather than
 ///   translating at every render site.
 ///
+/// **The canonical side must be the name an Australian shopper uses** —
+/// "eggplant" and "zucchini", not the British "aubergine"/"courgette". That
+/// isn't only a display preference: `SEASONAL_PRODUCE` is written in the same
+/// vocabulary, so canonicalising away from it means a name that can never
+/// match the seasonal table and silently loses its rating. Both tables have
+/// to agree, and this is the side that moves.
+///
 /// Single-word aliases only — the per-word application is what makes this
 /// compose with plurals and multi-word produce for free.
 /// ponytail: a flat list, not a config file. It changes when the newsletter
@@ -575,9 +582,14 @@ const PRODUCE_ALIASES: &[(&str, &str)] = &[
     ("kumera", "sweet potato"),
     ("kumara", "sweet potato"),
     ("arugula", "rocket"),
-    ("zucchini", "courgette"),
-    ("eggplant", "aubergine"),
-    ("scallion", "shallot"),
+    ("courgette", "zucchini"),
+    ("aubergine", "eggplant"),
+    // NOT "shallot": in AU a shallot (eschalot) is a different vegetable, and
+    // SEASONAL_PRODUCE lists both separately. A US recipe's scallions are
+    // spring onions.
+    // ponytail: "green onion" would need a multi-word key, which the per-word
+    // lookup can't do — add that only if a recipe actually uses the phrase.
+    ("scallion", "spring onion"),
     ("snowpea", "snow pea"),
     ("bellpepper", "capsicum"),
 ];
@@ -2234,6 +2246,24 @@ mod tests {
         // "corn tortillas" — see NOT_A_PRODUCE_FORM.
         assert!(!produce_matches("apple", "apple cider vinegar"));
         assert!(!produce_matches("corn", "corn tortillas"));
+    }
+
+    // An alias must never point *away* from the seasonal table's vocabulary.
+    // Aliasing "eggplant" -> "aubergine" while SEASONAL_PRODUCE says
+    // "eggplant" meant every canonicalised name silently failed to match the
+    // table and lost its seasonal rating — no error, just a lower score. This
+    // catches the direction being written backwards, which is the easy
+    // mistake to make when adding a pair.
+    #[test]
+    fn aliases_never_point_away_from_the_seasonal_table() {
+        for (from, to) in PRODUCE_ALIASES {
+            if SEASONAL_PRODUCE.iter().any(|(name, _)| name == from) {
+                panic!(
+                    "alias ({from:?} -> {to:?}) rewrites {from:?}, which is what \
+                     SEASONAL_PRODUCE calls it — the pair is backwards"
+                );
+            }
+        }
     }
 
     // The frontend joins these terms into one regex alternation, which is
