@@ -27,11 +27,13 @@ jobs:
           node-version: 22
           cache: npm
 
+      # Apple Silicon only — no x86_64, and no --target below, so the bundle
+      # is whatever macos-latest natively is (aarch64). A universal build
+      # doubled the binary (13MB -> 33MB) to carry Intel code that nobody
+      # running this needs; the updater downloads that on every release.
+      # Add x86_64-apple-darwin back here and `--target
+      # universal-apple-darwin` to tauri-action if an Intel Mac ever needs it.
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          # Both arches so the bundle runs on Intel and Apple Silicon; the
-          # universal target below needs each one present.
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -57,4 +59,3 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: Sprout ${{ github.ref_name }}
           releaseDraft: true # so you can write notes before it goes live
-          args: --target universal-apple-darwin
