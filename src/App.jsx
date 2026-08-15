@@ -9,7 +9,7 @@ import { ContextMenu, useContextMenu } from "./components/ContextMenu.jsx";
 import { produceIcon } from "./components/icons.js";
 import { resolveOpen } from "./openCard.js";
 import { imageSrc } from "./imageSrc.js";
-import { recipesUsing } from "./recipesUsing.js";
+import { recipesUsing, produceType } from "./recipesUsing.js";
 import { checkForUpdate, installUpdate } from "./update.js";
 
 const { invoke } = window.__TAURI__.core;
@@ -158,13 +158,8 @@ export default function App() {
   // the article *replaces* the detail pane, so the selection would otherwise
   // be invisible until the reader closed it by hand.
   function selectProduceByName(name) {
-    const n = name.trim().toLowerCase();
-    const item =
-      produce.fruit.find((p) => p.toLowerCase() === n)
-        ? { name, type: "Fruit" }
-        : { name, type: "Vegetable" };
     setShowArticle(false);
-    setSelection({ kind: "produce", item });
+    setSelection({ kind: "produce", item: { name, type: produceType(produce, name) } });
   }
 
   async function runMatch() {

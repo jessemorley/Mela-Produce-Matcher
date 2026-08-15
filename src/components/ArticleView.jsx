@@ -196,7 +196,6 @@ function sanitizeArticle(html, terms) {
 export default function ArticleView({ title, html, produce, onSelectProduce }) {
   const articleRef = useRef(null);
   const [banner, setBanner] = useState(null);
-  const [terms, setTerms] = useState(null);
   const [archive, setArchive] = useState(null); // null until the picker's opened once
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [picked, setPicked] = useState(null); // an ArchiveEntry, or null for "this week"
@@ -205,24 +204,34 @@ export default function ArticleView({ title, html, produce, onSelectProduce }) {
     ? { title: picked.feed_title, html: picked.feed_html }
     : { title, html };
 
-  // The searchable produce vocabulary, from Rust so the alias table stays in
-  // one place. Re-fetched when the week's produce changes.
-  useEffect(() => {
-    invoke("produce_search_terms", {
-      fruit: produce?.fruit ?? [],
-      vegetable: produce?.vegetable ?? [],
-    })
-      .then(setTerms)
-      .catch(() => setTerms([])); // no links is a fine degradation
-  }, [produce?.fruit, produce?.vegetable]);
-
+  // Fetches the searchable produce vocabulary (from Rust, so the alias table
+  // stays in one place) and sanitizes in the same pass, so the article never
+  // renders once unlinked and again once terms arrive. `produce` is always
+  // *this week's* picks — an archived post has no produce list of its own
+  // (ArchiveEntry only carries title/html), so linking it against this week's
+  // vocabulary would tag mentions with the wrong season's tiles. Only the
+  // current post gets links; an archived post renders with none, which is a
+  // fine degradation over a misleading one.
   useEffect(() => {
     const el = articleRef.current;
     if (!el) return;
-    const sanitized = sanitizeArticle(shown.html || "", terms);
-    el.replaceChildren(...sanitized.body.childNodes);
-    setBanner(sanitized.banner);
-  }, [shown.html, terms]);
+    const terms = picked
+      ? Promise.resolve([])
+      : invoke("produce_search_terms", {
+          fruit: produce?.fruit ?? [],
+          vegetable: produce?.vegetable ?? [],
+        }).catch(() => []); // no links is a fine degradation
+    let cancelled = false;
+    terms.then((terms) => {
+      if (cancelled) return;
+      const sanitized = sanitizeArticle(shown.html || "", terms);
+      el.replaceChildren(...sanitized.body.childNodes);
+      setBanner(sanitized.banner);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [shown.html, produce?.fruit, produce?.vegetable, picked]);
 
   useEffect(() => {
     if (!archiveOpen || archive) return;

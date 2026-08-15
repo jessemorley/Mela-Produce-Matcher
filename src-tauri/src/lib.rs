@@ -590,8 +590,11 @@ const PRODUCE_ALIASES: &[(&str, &str)] = &[
     // ponytail: "green onion" would need a multi-word key, which the per-word
     // lookup can't do — add that only if a recipe actually uses the phrase.
     ("scallion", "spring onion"),
-    ("snowpea", "snow pea"),
-    ("bellpepper", "capsicum"),
+    // NOT "snowpea"/"bellpepper": real prose writes these as two words ("snow
+    // pea", "bell pepper"), so a single-word key here would never match
+    // anything — normalise splits on whitespace before alias() ever runs.
+    // Genuinely fixing these needs a multi-word key, which the per-word
+    // lookup can't do; see the doc comment on produce_matches.
 ];
 
 /// Resolves one lowercase singular word to its canonical form, or returns it
