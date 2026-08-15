@@ -49,6 +49,57 @@ vite build` (or `cargo check` for Rust) is the available correctness check;
 the user verifies UI/UX changes visually themselves in the running
 `npm run tauri dev` window.
 
+## Releasing and auto-update
+
+The app updates itself via `tauri-plugin-updater`, checking GitHub Releases
+on launch. Shipping a version is: bump `version` in **both** `package.json`
+and `src-tauri/tauri.conf.json` (they're read independently — the updater
+compares against the `tauri.conf.json` one), then tag and push:
+
+    npm version 0.3.0 && git push --follow-tags
+
+That fires `.github/workflows/release.yml`, which builds a universal macOS
+bundle and attaches the signed artifacts plus `latest.json` — the manifest
+the updater actually reads — to a **draft** release. Drafts don't count as
+"latest" on GitHub, so `releases/latest/download/latest.json` 404s and no
+client sees the update until the draft is published by hand. That's the
+intended gate (write release notes, then ship), not a bug to fix.
+
+One secret has to exist on the repo or the workflow produces unsigned
+bundles that every client silently rejects: `TAURI_SIGNING_PRIVATE_KEY`, the
+contents of `~/.tauri/sprout.key`. There is deliberately no
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secret — the key was generated without
+a password, and GitHub rejects an empty secret value ("failed to add
+secret"). The workflow hardcodes it to `""` instead. It does have to be set
+to *something*: leaving the variable out entirely makes the CLI prompt for a
+password, which on a TTY-less runner dies with `incorrect updater private
+key password: Device not configured (os error 6)`. The matching public key is
+inlined at `plugins.updater.pubkey` in `tauri.conf.json`; the updater refuses
+any bundle whose signature doesn't verify against it, which is the whole
+security model, since **the app is only ad-hoc signed** (`signingIdentity:
+"-"`, no Apple Developer cert) and macOS Gatekeeper therefore isn't
+vouching for anything. Losing `~/.tauri/sprout.key` means no existing
+install can ever be updated again — a new keypair only works for installs
+that already shipped with the new pubkey.
+
+`bundle.createUpdaterArtifacts: true` is what emits the `.app.tar.gz` +
+`.sig` pair the updater consumes. Note this is the **v2** spelling — v1's
+`"updater"` bundle *target* no longer exists, and putting it in
+`bundle.targets` fails the build with the unhelpful `data did not match any
+variant of untagged enum BundleTargetInner`.
+
+Frontend side, `src/update.js` talks to `plugin:updater|check` and
+`plugin:updater|download_and_install` through `invoke` directly rather than
+importing `@tauri-apps/plugin-updater`. The plugin's own JS wrapper is an ES
+module that imports `@tauri-apps/api`, which this app doesn't depend on (it
+runs on `withGlobalTauri` globals), and the wrapper is only a few lines over
+those two IPC calls. `install` relaunches the app itself, so nothing after it
+resolves. The launch check in `App.jsx` is deliberately *not* chained onto
+`sync_on_launch` — an unreachable endpoint must not stop recipes loading —
+and its failures are swallowed rather than shown, since "no update" is the
+normal case. `node src/update.test.js` covers the download-progress fold
+(the zero-content-length case returns null instead of rendering `NaN%`).
+
 ## Architecture
 
 **Backend** (`src-tauri/src/lib.rs`) exposes Tauri commands:
@@ -396,6 +447,9 @@ runner, no framework, since the repo has no JS test setup):
   recipes..."`, must NOT parse).
 - `node src/components/rankNames.test.js` — the Fix queue's fuzzy matching,
   whose threshold degrades silently if wrong.
+- `node src/update.test.js` — the updater's download-progress fold, whose
+  failure modes are all silent (`NaN%` from a missing content-length, `103%`
+  from an overshooting chunk).
 
 **Responsive rules** (the `.shell` block in `App.jsx`): one pane gives up
 width at a time, in priority order — detail first, then the list, then the

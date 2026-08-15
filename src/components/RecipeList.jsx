@@ -449,6 +449,9 @@ export default function RecipeList({
   onSyncNow,
   unfixedCount,
   onFixNow,
+  update,
+  updating,
+  onUpdate,
   onOpenArticle,
   status,
   busy,
@@ -500,6 +503,23 @@ export default function RecipeList({
           ))}
         </div>
       </div>
+
+      {/* Outside the view switch, unlike the Sync/Fix banners below it: those
+          are about the recipe collection and belong to Best Matches, but a
+          pending update is about the app itself and shouldn't disappear
+          because you're on another tab. */}
+      {update && (
+        <button
+          onClick={onUpdate}
+          disabled={updating}
+          className="relative z-10 mx-3 mb-3 mt-3 flex items-center justify-between rounded-xl bg-match/10 px-3.5 py-2 text-left transition-colors hover:brightness-125 disabled:opacity-60"
+        >
+          <span className="text-[11.5px] text-match-soft">Version {update.version}</span>
+          <span className="text-[11px] font-medium text-match">
+            {updating ? "Updating..." : "Update"}
+          </span>
+        </button>
+      )}
 
       {selectedNav === "produce" ? (
         <ProduceView

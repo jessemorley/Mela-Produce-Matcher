@@ -1,0 +1,60 @@
+# Builds the app and publishes the updater feed. Tag a release to fire it:
+#   npm version 0.3.0 && git push --follow-tags
+#
+# The updater endpoint in tauri.conf.json points at this repo's
+# releases/latest/download/latest.json, which tauri-action generates and
+# attaches here. Nothing else writes that file — an update only reaches
+# users once this workflow has run green on a tag.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    # macOS only: this app reads Mela's SQLite out of a macOS group container
+    # and opens mela:// URLs, so there's nothing to ship on other platforms.
+    runs-on: macos-latest
+    permissions:
+      contents: write # tauri-action creates the release and uploads to it
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # Both arches so the bundle runs on Intel and Apple Silicon; the
+          # universal target below needs each one present.
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The updater refuses any bundle whose signature doesn't match the
+          # pubkey baked into tauri.conf.json, so this secret is what makes
+          # the feed trustworthy. Without it the build still succeeds but
+          # ships no signature, and every client rejects the update.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # Empty on purpose, and hardcoded rather than a secret: the key was
+          # generated without a password, and GitHub refuses to store an
+          # empty secret value. It still has to be *set* — unset makes the
+          # CLI prompt for a password, which on a TTY-less runner fails the
+          # build with "Device not configured (os error 6)".
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Sprout ${{ github.ref_name }}
+          releaseDraft: true # so you can write notes before it goes live
+          args: --target universal-apple-darwin

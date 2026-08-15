@@ -31,3 +31,13 @@ dist-ssr
 # the repo. Nothing imports either.
 /svg/
 /text-*.jsx
+
+# Updater signing keys. The real one lives in ~/.tauri/ and should never be
+# here at all — this is a backstop, since anyone holding it can sign an
+# update that every install will trust and run.
+*.key
+
+# Local snapshots of Mela's SQLite — personal recipe data, and this is a
+# public repo.
+/.mela-backups/
+

@@ -10,6 +10,7 @@ import { produceIcon } from "./components/icons.js";
 import { resolveOpen } from "./openCard.js";
 import { imageSrc } from "./imageSrc.js";
 import { recipesUsing } from "./recipesUsing.js";
+import { checkForUpdate, installUpdate } from "./update.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -39,6 +40,8 @@ export default function App() {
   const [unanalyzedCount, setUnanalyzedCount] = useState(0);
   const [unfixedCount, setUnfixedCount] = useState(0);
   const [showFixNow, setShowFixNow] = useState(false);
+  const [update, setUpdate] = useState(null); // { rid, version } when one is available
+  const [updating, setUpdating] = useState(false);
   const [menu, openMenu, closeMenu] = useContextMenu();
 
   // ONE selection drives the detail pane, whatever view made it — switching
@@ -72,10 +75,34 @@ export default function App() {
       .catch((err) => setStatus(err === "cancelled" ? "Cancelled." : `Error: ${err}`))
       .finally(() => setBusy(false));
 
+    // Deliberately not chained onto sync_on_launch: an unreachable update
+    // endpoint (offline, release yanked) must not stop recipes loading, and
+    // a silent no-update is the normal case, so a failure here is swallowed
+    // rather than shown in the status bar.
+    checkForUpdate()
+      .then((available) => available && setUpdate(available))
+      .catch(() => {});
+
     return () => {
       unlistenPromises.forEach((p) => p.then((unlisten) => unlisten()));
     };
   }, []);
+
+  // The updater relaunches the app on success, so there's no done state to
+  // handle — only the failure path returns here.
+  const runUpdate = async () => {
+    setUpdating(true);
+    try {
+      await installUpdate(update.rid, (pct) =>
+        setStatus(pct === null ? "Downloading update..." : `Downloading update... ${Math.round(pct * 100)}%`),
+      );
+    } catch (err) {
+      setStatus(`Update failed: ${err}`);
+      setUpdate(null); // don't leave a banner that just fails again this session
+    } finally {
+      setUpdating(false);
+    }
+  };
 
   // Matching is local set-intersection now, not a Claude call, so it's
   // cheap enough to just re-run whenever the produce list or the analysed
@@ -296,6 +323,9 @@ export default function App() {
           onSyncNow={analyzeNew}
           unfixedCount={unfixedCount}
           onFixNow={() => setShowFixNow(true)}
+          update={update}
+          updating={updating}
+          onUpdate={runUpdate}
           onOpenArticle={() => setShowArticle(true)}
           status={status}
           busy={busy}
