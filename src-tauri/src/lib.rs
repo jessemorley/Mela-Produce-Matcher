@@ -2572,6 +2572,30 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(RunningChild::default())
+        .setup(|app| {
+            // Default macOS menu with one extra item in the app submenu. The
+            // item does no work here — the frontend already owns the whole
+            // check/download/install flow (src/update.js), so this just emits
+            // and App.jsx runs the same path the launch check does.
+            let menu = tauri::menu::Menu::default(app.handle())?;
+            let check = tauri::menu::MenuItem::with_id(
+                app.handle(),
+                "check-for-updates",
+                "Check for Updates...",
+                true,
+                None::<&str>,
+            )?;
+            if let Some(tauri::menu::MenuItemKind::Submenu(app_menu)) = menu.items()?.first() {
+                app_menu.insert(&check, 1)?; // just below "About Sprout"
+            }
+            app.set_menu(menu)?;
+            Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id() == "check-for-updates" {
+                let _ = app.emit("check-for-updates", ());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             sync_on_launch,
             full_resync,

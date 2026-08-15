@@ -55,6 +55,18 @@ export default function App() {
     const unlistenPromises = [
       listen("status", (e) => setStatus(e.payload)),
       listen("produce", (e) => setProduce(e.payload)),
+      // Menu bar > Sprout > Check for Updates. Same call as the launch check
+      // below, but user-initiated, so the "already current" and failure cases
+      // get said out loud instead of swallowed.
+      listen("check-for-updates", () => {
+        setStatus("Checking for updates...");
+        checkForUpdate()
+          .then((available) => {
+            setUpdate(available || null);
+            setStatus(available ? `Version ${available.version} available.` : "Sprout is up to date.");
+          })
+          .catch((err) => setStatus(`Update check failed: ${err}`));
+      }),
     ];
 
     setBusy(true);
