@@ -13,7 +13,71 @@ const { invoke } = window.__TAURI__.core;
 // The feed is a fixed trusted merchant, but its HTML still shouldn't run
 // anything inside the app webview: keep only the content, drop active bits
 // and inline styling so our CSS formats it.
-function sanitizeArticle(html) {
+// Wraps every mention of an in-season produce name in a click target that
+// selects the matching tile in the list pane. `terms` comes from the Rust
+// `produce_search_terms` command — each spelling worth searching for plus the
+// canonical tile name it resolves to, already sorted longest-first.
+//
+// The newsletter's own words are never rewritten: a "kumera" mention still
+// reads "kumera", it just carries `data-produce="sweet potato"`. The alias
+// vocabulary stays in Rust; this only scans.
+//
+// One regex alternation does all the matching logic, deliberately. Regex
+// alternation is first-match-wins, so the longest-first ordering *is* the
+// rule that stops "potato" claiming a "sweet potato" mention — no separate
+// pass. `\b` gives word boundaries, so "corn" can't match "corned beef", and
+// the `g`/`i` flags cover every mention and the feed's inconsistent casing.
+//
+// Only text nodes are touched, which is what makes this safe: an href or an
+// alt attribute containing a produce name can't be corrupted, because the
+// walk never sees it.
+function linkProduceMentions(doc, terms) {
+  if (!terms?.length) return;
+  const canonical = new Map(terms.map((t) => [t.term.toLowerCase(), t.canonical]));
+  const pattern = terms.map((t) => t.term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  // The trailing `(?:e?s)?` catches the plurals prose is actually written in
+  // — "kumeras", "potatoes" — which the terms themselves are not (they're
+  // singular, matching the tile names). Without it `\b` stops at the "s" and
+  // most real mentions are missed. Deliberately cruder than the Rust
+  // `singular`: over-matching here costs a link on "peas" pointing at the
+  // "pea" tile, which is right anyway.
+  const re = new RegExp(`\\b(${pattern})(?:e?s)?\\b`, "gi");
+
+  // Collected before mutating: replacing a node mid-walk invalidates the
+  // walker's position.
+  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  const targets = [];
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    // Leave the newsletter's own links alone (they open in the browser), and
+    // skip the eyebrow headings and promo footer — a link there reads as
+    // chrome rather than a mention in prose.
+    if (node.parentElement?.closest("a, h3, .link-row")) continue;
+    if (re.test(node.data)) targets.push(node);
+    re.lastIndex = 0;
+  }
+
+  for (const node of targets) {
+    const frag = doc.createDocumentFragment();
+    let last = 0;
+    for (const m of node.data.matchAll(re)) {
+      frag.append(node.data.slice(last, m.index));
+      const link = doc.createElement("a");
+      link.className = "produce-link";
+      // m[0] is the whole match including any plural suffix ("kumeras"), m[1]
+      // the bare term the canonical map is keyed on ("kumera"). The link
+      // *shows* m[0] so the newsletter's own words are untouched, and
+      // *carries* the canonical tile name.
+      link.setAttribute("data-produce", canonical.get(m[1].toLowerCase()) ?? m[1].toLowerCase());
+      link.textContent = m[0];
+      frag.append(link);
+      last = m.index + m[0].length;
+    }
+    frag.append(node.data.slice(last));
+    node.replaceWith(frag);
+  }
+}
+
+function sanitizeArticle(html, terms) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   doc
     .querySelectorAll("script, style, iframe, object, embed, form, link, meta, button")
@@ -106,6 +170,11 @@ function sanitizeArticle(html) {
     if ((!text && !el.querySelector("img")) || /^-\s*david harris$/i.test(text)) el.remove();
   });
 
+  // Last, deliberately: after the attribute pass above (which would otherwise
+  // strip `data-produce` right back off) and after the pruning (no point
+  // scanning content that's about to be removed).
+  linkProduceMentions(doc, terms);
+
   return { body: doc.body, banner };
 }
 
@@ -114,9 +183,10 @@ function sanitizeArticle(html) {
 // already loaded by the launch sync; picking an older post from the archive
 // dropdown swaps in that entry's title/html locally instead, so the current
 // post never needs a re-fetch just to view it again.
-export default function ArticleView({ title, html }) {
+export default function ArticleView({ title, html, produce, onSelectProduce }) {
   const articleRef = useRef(null);
   const [banner, setBanner] = useState(null);
+  const [terms, setTerms] = useState(null);
   const [archive, setArchive] = useState(null); // null until the picker's opened once
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [picked, setPicked] = useState(null); // an ArchiveEntry, or null for "this week"
@@ -125,13 +195,24 @@ export default function ArticleView({ title, html }) {
     ? { title: picked.feed_title, html: picked.feed_html }
     : { title, html };
 
+  // The searchable produce vocabulary, from Rust so the alias table stays in
+  // one place. Re-fetched when the week's produce changes.
+  useEffect(() => {
+    invoke("produce_search_terms", {
+      fruit: produce?.fruit ?? [],
+      vegetable: produce?.vegetable ?? [],
+    })
+      .then(setTerms)
+      .catch(() => setTerms([])); // no links is a fine degradation
+  }, [produce?.fruit, produce?.vegetable]);
+
   useEffect(() => {
     const el = articleRef.current;
     if (!el) return;
-    const sanitized = sanitizeArticle(shown.html || "");
+    const sanitized = sanitizeArticle(shown.html || "", terms);
     el.replaceChildren(...sanitized.body.childNodes);
     setBanner(sanitized.banner);
-  }, [shown.html]);
+  }, [shown.html, terms]);
 
   useEffect(() => {
     if (!archiveOpen || archive) return;
@@ -153,8 +234,17 @@ export default function ArticleView({ title, html }) {
   useEffect(() => {
     const el = articleRef.current;
     if (!el) return;
-    // Links inside the article open in the real browser, not the webview.
+    // Two kinds of link live in here. A produce mention selects its tile in
+    // the list pane and is checked first — it carries no href, so the
+    // outbound branch below would skip it. Everything else is the
+    // newsletter's own link and opens in the real browser, not the webview.
     function onClick(e) {
+      const mention = e.target.closest("a[data-produce]");
+      if (mention) {
+        e.preventDefault();
+        onSelectProduce?.(mention.getAttribute("data-produce"));
+        return;
+      }
       const a = e.target.closest("a[href]");
       if (!a) return;
       e.preventDefault();
@@ -162,7 +252,7 @@ export default function ArticleView({ title, html }) {
     }
     el.addEventListener("click", onClick);
     return () => el.removeEventListener("click", onClick);
-  }, []);
+  }, [onSelectProduce]);
 
   return (
     <div className="pb-16">
@@ -241,6 +331,18 @@ export default function ArticleView({ title, html }) {
           color: var(--color-match);
           text-decoration: none;
           border-bottom: 1px solid color-mix(in oklab, var(--color-match) 35%, transparent);
+        }
+        /* An in-app jump, not an outbound link: same green, but a dotted
+           underline and a pointer cursor rather than the solid rule the
+           newsletter's own links get. Overrides the rule above, which matches
+           every <a> including these. */
+        .prose-newsletter a.produce-link {
+          cursor: pointer;
+          border-bottom: 1px dotted color-mix(in oklab, var(--color-match) 55%, transparent);
+        }
+        .prose-newsletter a.produce-link:hover {
+          color: var(--color-text);
+          border-bottom-color: color-mix(in oklab, var(--color-match) 90%, transparent);
         }
         .prose-newsletter img { max-width: 100%; border-radius: 12px; }
         .prose-newsletter b, .prose-newsletter strong { color: var(--color-text); font-weight: 600; }

@@ -1667,6 +1667,73 @@ fn seasonal_in_season() -> SeasonalInfo {
     }
 }
 
+/// One searchable spelling of an in-season produce name: the `term` to look
+/// for in newsletter prose, and the `canonical` name the tiles are keyed on.
+/// The two differ for an alias — ("kumera", "sweet potato") — which is the
+/// whole point: the article keeps the newsletter's own word while the link it
+/// carries resolves to the tile.
+#[derive(Serialize, PartialEq, Debug)]
+struct SearchTerm {
+    term: String,
+    canonical: String,
+}
+
+/// Every spelling worth hunting for in the market update's prose, for the
+/// produce that's actually in season — each canonical name plus any
+/// `PRODUCE_ALIASES` spelling that resolves to it.
+///
+/// **Sorted longest term first, and callers depend on that.** The frontend
+/// joins these into one regex alternation, which is first-match-wins, so the
+/// ordering is what stops "potato" claiming a "sweet potato" mention. It's
+/// the ordering rather than any separate rule, which is why the test pins it.
+///
+/// Built here rather than in JS so `PRODUCE_ALIASES` stays the single source
+/// of the vocabulary — the frontend does the scanning but never owns the
+/// synonyms. Out-of-season names are excluded: with no tile to activate, a
+/// link would go nowhere.
+#[tauri::command]
+fn produce_search_terms(fruit: Vec<String>, vegetable: Vec<String>) -> Vec<SearchTerm> {
+    let mut names: Vec<String> = fruit
+        .into_iter()
+        .chain(vegetable)
+        .chain(seasonal_produce(current_season()))
+        .map(|n| n.to_lowercase())
+        .collect();
+    names.sort();
+    names.dedup();
+
+    let mut terms: Vec<SearchTerm> = names
+        .iter()
+        .flat_map(|canonical| {
+            // The canonical name itself, plus every alias pointing at it.
+            // Aliases are stored single-word, so an alias for a multi-word
+            // canonical ("kumera" -> "sweet potato") is found by comparing
+            // against the whole canonical, not word by word.
+            std::iter::once(canonical.clone())
+                .chain(
+                    PRODUCE_ALIASES
+                        .iter()
+                        .filter(|(_, to)| *to == canonical.as_str())
+                        .map(|(from, _)| from.to_string()),
+                )
+                .map(|term| SearchTerm {
+                    term,
+                    canonical: canonical.clone(),
+                })
+        })
+        .collect();
+
+    // Longest first — see the ordering note above. Length ties break
+    // alphabetically so the output is stable rather than hash-ordered.
+    terms.sort_by(|a, b| {
+        b.term
+            .len()
+            .cmp(&a.term.len())
+            .then_with(|| a.term.cmp(&b.term))
+    });
+    terms
+}
+
 /// Fixes an unanalysed ingredient line by hand — the "Fix Now" queue.
 /// Clears every ingredient across the whole collection whose `display` is
 /// byte-identical to `display` (not just the one row the user was looking
@@ -2155,6 +2222,38 @@ mod tests {
         assert!(!produce_matches("corn", "corn tortillas"));
     }
 
+    // The frontend joins these terms into one regex alternation, which is
+    // first-match-wins, so longest-first ordering is the only thing stopping
+    // "potato" from claiming a "sweet potato" mention. Pinned because that
+    // coupling is invisible from the JS side: get the order wrong and the
+    // article links the wrong tile with no error anywhere.
+    #[test]
+    fn search_terms_carry_aliases_and_sort_longest_first() {
+        let terms = produce_search_terms(vec![], vec!["sweet potato".into(), "coriander".into()]);
+
+        let by_len: Vec<usize> = terms.iter().map(|t| t.term.len()).collect();
+        let mut sorted = by_len.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        assert_eq!(by_len, sorted, "terms must be longest-first");
+
+        // An alias is searchable but resolves to the canonical tile name.
+        let kumera = terms.iter().find(|t| t.term == "kumera").expect("alias");
+        assert_eq!(kumera.canonical, "sweet potato");
+        let cilantro = terms.iter().find(|t| t.term == "cilantro").expect("alias");
+        assert_eq!(cilantro.canonical, "coriander");
+
+        // The canonical name is searchable as itself, too.
+        assert!(terms
+            .iter()
+            .any(|t| t.term == "sweet potato" && t.canonical == "sweet potato"));
+
+        // "sweet potato" must outrank the seasonal table's own "potato".
+        let pos = |term: &str| terms.iter().position(|t| t.term == term);
+        if let (Some(sweet), Some(plain)) = (pos("sweet potato"), pos("potato")) {
+            assert!(sweet < plain, "longer name must come first");
+        }
+    }
+
     // Only synonyms listed in PRODUCE_ALIASES bridge — there's no general
     // synonym rule, so a pair nobody has added stays unmatched. Pinned so the
     // limitation is visible rather than discovered as a silent miss; the fix
@@ -2400,6 +2499,7 @@ pub fn run() {
             list_recipes,
             list_archive,
             seasonal_in_season,
+            produce_search_terms,
             set_ingredient_name,
             set_excluded,
             cancel,
