@@ -42,7 +42,7 @@ export default function App() {
   const [showFixNow, setShowFixNow] = useState(false);
   const [update, setUpdate] = useState(null); // { rid, version } when one is available
   const [updating, setUpdating] = useState(false);
-  const [menu, openMenu, closeMenu] = useContextMenu();
+  const [menu, openMenu, closeMenu, menuRef] = useContextMenu();
 
   // ONE selection drives the detail pane, whatever view made it — switching
   // nav browses, it doesn't select, so the pane holds until you pick something
@@ -421,6 +421,7 @@ export default function App() {
 
       <ContextMenu
         menu={menu}
+        menuRef={menuRef}
         items={
           menu
             ? [

@@ -1,21 +1,27 @@
 // Right-click menu for recipe rows, shared by both list panes. Exclude used
 // to be a button in the detail header; it's rare housekeeping, so it lives
 // here rather than sitting beside "Open in Mela".
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // Returns [menu, openAt, close] — spread openAt onto a row's onContextMenu.
 export function useContextMenu() {
   const [menu, setMenu] = useState(null); // { x, y, item }
+  const menuRef = useRef(null); // set by ContextMenu below
 
   useEffect(() => {
     if (!menu) return;
-    const close = () => setMenu(null);
-    // Capture phase: a click anywhere dismisses, including on the row that
-    // opened it. Scroll/resize would leave the menu stranded, so those too.
+    // Capture phase runs before the click reaches a menu button in bubble
+    // phase, so an unconditional close() here unmounted the menu out from
+    // under its own item clicks — "Exclude" closed the menu but never fired.
+    // Only close for clicks that land outside the menu itself.
+    const close = (e) => {
+      if (menuRef.current?.contains(e.target)) return;
+      setMenu(null);
+    };
     window.addEventListener("click", close, true);
     window.addEventListener("scroll", close, true);
     window.addEventListener("resize", close);
-    const onKey = (e) => e.key === "Escape" && close();
+    const onKey = (e) => e.key === "Escape" && setMenu(null);
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("click", close, true);
@@ -30,10 +36,10 @@ export function useContextMenu() {
     setMenu({ x: e.clientX, y: e.clientY, item });
   };
 
-  return [menu, openAt, () => setMenu(null)];
+  return [menu, openAt, () => setMenu(null), menuRef];
 }
 
-export function ContextMenu({ menu, items }) {
+export function ContextMenu({ menu, items, menuRef }) {
   if (!menu) return null;
 
   // Keep the menu on screen when the row is near the right/bottom edge.
@@ -44,9 +50,9 @@ export function ContextMenu({ menu, items }) {
 
   return (
     <div
+      ref={menuRef}
       className="fixed z-50 rounded-xl bg-pane py-1 shadow-[0_8px_24px_rgba(19,18,17,0.6)]"
       style={{ left: x, top: y, width: W }}
-      onClick={(e) => e.stopPropagation()}
     >
       {items.map(({ label, icon: Icon, onClick, danger }) => (
         <button
