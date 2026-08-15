@@ -42,7 +42,7 @@ export default function App() {
   const [showFixNow, setShowFixNow] = useState(false);
   const [update, setUpdate] = useState(null); // { rid, version } when one is available
   const [updating, setUpdating] = useState(false);
-  const [menu, openMenu, closeMenu] = useContextMenu();
+  const [menu, openMenu, closeMenu, menuRef] = useContextMenu();
 
   // ONE selection drives the detail pane, whatever view made it — switching
   // nav browses, it doesn't select, so the pane holds until you pick something
@@ -421,6 +421,7 @@ export default function App() {
 
       <ContextMenu
         menu={menu}
+        menuRef={menuRef}
         items={
           menu
             ? [
@@ -482,13 +483,12 @@ function ProducePane({ item, recipes, produce }) {
 // Stacked matches, one expanded at a time. A collapsed card is a short crop
 // of the same banner with the title over it, so the stack reads as a set of
 // photos rather than a list of bars; the open one renders the full detail
-// body. Defaults to the top match open, so the pane is never just a strip of
-// headers.
+// body. Starts fully collapsed — with several matches, popping the top one
+// open read as an arbitrary pick rather than a deliberate choice. A single
+// match has no collapse control at all (see `onCollapse` below) so it still
+// needs to start open, or it'd render with no way in.
 function ProduceStack({ recipes, produce }) {
-  // undefined = untouched, so default to the top match; null = deliberately
-  // collapsed, which has to stick or the collapse button would appear to do
-  // nothing on the first card.
-  const [openId, setOpenId] = useState(undefined);
+  const [openId, setOpenId] = useState(recipes.length === 1 ? recipes[0].id : null);
   const openRef = useRef(null);
   // Only scroll for a card the user actually opened, not the one that starts
   // open on mount — landing on the pane already scrolled would be wrong.
