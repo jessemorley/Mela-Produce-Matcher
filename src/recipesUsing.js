@@ -17,3 +17,16 @@ export function recipesUsing(rankedRecipes, name) {
     ),
   );
 }
+
+// Fruit/Vegetable for a produce name, the single lookup both RecipeList's
+// tiles and App's produce-link selection use — so they can't classify the
+// same name two different ways. Only this week's market update carries a
+// type at all (the seasonal table is a flat name list), so anything not in
+// `produce.fruit`/`vegetable` — including every seasonal-only name — comes
+// back undefined, and produceIcon's own vegetable-mark fallback covers it.
+export function produceType(produce, name) {
+  const n = name.trim().toLowerCase();
+  if (produce.fruit.some((p) => p.toLowerCase() === n)) return "Fruit";
+  if (produce.vegetable.some((p) => p.toLowerCase() === n)) return "Vegetable";
+  return undefined;
+}

@@ -4,7 +4,7 @@ import { produceIcon, VEGETABLE } from "./icons.js";
 import { FilterChip, ListEmpty } from "./ListStates.jsx";
 import StatusBar from "./StatusBar.jsx";
 import { imageSrc } from "../imageSrc.js";
-import { recipesUsing } from "../recipesUsing.js";
+import { recipesUsing, produceType } from "../recipesUsing.js";
 
 // Header of every list view — same slot, same chrome, so switching nav never
 // moves the pane's furniture.
@@ -160,8 +160,8 @@ function MatchingView({
 
 function splitProduce(produce, seasonal) {
   const market = [
-    ...produce.fruit.map((name) => ({ name, type: "Fruit" })),
-    ...produce.vegetable.map((name) => ({ name, type: "Vegetable" })),
+    ...produce.fruit.map((name) => ({ name, type: produceType(produce, name) })),
+    ...produce.vegetable.map((name) => ({ name, type: produceType(produce, name) })),
   ];
   const marketNames = new Set(market.map((m) => m.name.toLowerCase()));
   const seasonalOnly = (seasonal.produce || []).filter((n) => !marketNames.has(n.toLowerCase()));

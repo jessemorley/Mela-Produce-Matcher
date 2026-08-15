@@ -427,8 +427,22 @@ fn build_produce_prompt(entry_title: &str, entry_text: &str) -> String {
         Vegetable: capsicum, corn, avocado\n\
         Pick of the week: apple\n\
         Featured: blueberry, corn\n\n\
+        Use the everyday name a shopper would put on a list, NOT a cultivar,\n\
+        variety or brand name. Collapse varieties to the produce they are: a\n\
+        newsletter naming \"Murcotts\", \"Afourers\" and \"Dekopon mandarins\"\n\
+        yields ONE item, \"mandarin\" — not three. Likewise \"Pink Lady\" and\n\
+        \"Granny Smith\" are both \"apple\", \"Kipfler\" is \"potato\", \"Roma\" is\n\
+        \"tomato\". Different produce that merely shares a category still stays\n\
+        separate, though: orange, mandarin and lemon are three items, and\n\
+        \"blood orange\" is its own item rather than \"orange\".\n\n\
+        Never output a category as an item. \"Citrus\", \"stone fruit\", \"berries\",\n\
+        \"greens\" and the like are groups, not something a shopper buys, so\n\
+        \"all the citrus is eating fantastically\" yields NO item of its own —\n\
+        list only the specific fruits named elsewhere in the post. Every item\n\
+        must be one specific produce, not a family of them.\n\n\
         Herbs count as vegetables. \"Pick of the week\" is the item the newsletter\n\
-        names as its pick of the week. \"Featured\" lists items given particular\n\
+        names as its pick of the week — as its everyday name too, so a pick of\n\
+        \"Dekopon mandarins\" is \"mandarin\". \"Featured\" lists items given particular\n\
         emphasis (called out as excellent quality or value right now). Every pick\n\
         or featured item must also appear, spelled identically, in the Fruit or\n\
         Vegetable line. Omit a line entirely if it has no items."
@@ -502,9 +516,11 @@ fn parse_key_ingredient_lines(
             current = Some((rest.trim().to_string(), Vec::new(), Vec::new()));
         } else if let Some(rest) = line.strip_prefix("key:") {
             if let Some((_, keys, _)) = current.as_mut() {
+                // Same canonicalisation as the feed side, so a recipe's
+                // "cilantro" is stored — and displayed — as "coriander".
                 *keys = rest
                     .split(',')
-                    .map(|s| s.trim().to_lowercase())
+                    .map(|s| canonical_produce(s.trim()))
                     .filter(|s| !s.is_empty())
                     .collect();
             }
@@ -518,7 +534,11 @@ fn parse_key_ingredient_lines(
             let Ok(idx) = idx.trim().parse::<usize>() else {
                 continue;
             };
-            let name = name.trim().to_lowercase();
+            // Must canonicalise on the same rule as the `key:` line above:
+            // `rate_recipe` pairs key ingredients to these by exact string
+            // equality, so aliasing one side only would break the pantry
+            // lookup and the supporting-produce exclusion.
+            let name = canonical_produce(name.trim());
             if name.is_empty() {
                 continue;
             }
@@ -530,6 +550,81 @@ fn parse_key_ingredient_lines(
         out.push(done);
     }
     out
+}
+
+/// Names for the same ingredient that this app resolves to one AU-English
+/// canonical form: `(alias, canonical)`, both lowercase singular. Two
+/// separate problems, one table:
+///
+/// - **Matching.** Recipes are written in US English ("cilantro") while the
+///   newsletter and the seasonal table are Australian ("coriander"), so
+///   `produce_matches` would never pair them. Applied per *word* during
+///   normalisation, after singularisation, so it composes with the existing
+///   head-word rule: "cilantro leaves" still extends to "coriander leaves".
+/// - **Display.** The newsletter writes "kumera"; the app shows the name the
+///   user's recipes use. `canonical_produce` rewrites feed names at parse
+///   time so the tiles, chips and detail pane read consistently, rather than
+///   translating at every render site.
+///
+/// **The canonical side must be the name an Australian shopper uses** —
+/// "eggplant" and "zucchini", not the British "aubergine"/"courgette". That
+/// isn't only a display preference: `SEASONAL_PRODUCE` is written in the same
+/// vocabulary, so canonicalising away from it means a name that can never
+/// match the seasonal table and silently loses its rating. Both tables have
+/// to agree, and this is the side that moves.
+///
+/// Single-word aliases only — the per-word application is what makes this
+/// compose with plurals and multi-word produce for free.
+/// ponytail: a flat list, not a config file. It changes when the newsletter
+/// or a recipe uses a name this misses, which is a code edit either way.
+const PRODUCE_ALIASES: &[(&str, &str)] = &[
+    ("cilantro", "coriander"),
+    ("kumera", "sweet potato"),
+    ("kumara", "sweet potato"),
+    ("arugula", "rocket"),
+    ("courgette", "zucchini"),
+    ("aubergine", "eggplant"),
+    // NOT "shallot": in AU a shallot (eschalot) is a different vegetable, and
+    // SEASONAL_PRODUCE lists both separately. A US recipe's scallions are
+    // spring onions.
+    // ponytail: "green onion" would need a multi-word key, which the per-word
+    // lookup can't do — add that only if a recipe actually uses the phrase.
+    ("scallion", "spring onion"),
+    // NOT "snowpea"/"bellpepper": real prose writes these as two words ("snow
+    // pea", "bell pepper"), so a single-word key here would never match
+    // anything — normalise splits on whitespace before alias() ever runs.
+    // Genuinely fixing these needs a multi-word key, which the per-word
+    // lookup can't do; see the doc comment on produce_matches.
+];
+
+/// Resolves one lowercase singular word to its canonical form, or returns it
+/// unchanged. Multi-word canonicals ("sweet potato") come back as a phrase,
+/// which `normalise` re-splits — that's why aliasing happens per word.
+fn alias(word: &str) -> &str {
+    PRODUCE_ALIASES
+        .iter()
+        .find(|(from, _)| *from == word)
+        .map(|(_, to)| *to)
+        .unwrap_or(word)
+}
+
+/// A produce name rewritten into the app's canonical vocabulary — the
+/// *display* half of `PRODUCE_ALIASES`, applied where names enter the app so
+/// every downstream reader (tiles, chips, detail pane) sees one name per
+/// ingredient.
+///
+/// Deliberately does NOT singularise, unlike `produce_matches`' normalise.
+/// There, `singular` is a comparison aid applied to both sides at once, so
+/// its crude rule is harmless when it overshoots ("asparagus" -> "asparagu"
+/// pairs with itself). Here the result is *stored and shown*, so the same
+/// overshoot would display "asparagu". Matching still bridges plurals on its
+/// own; storage only needs the alias.
+fn canonical_produce(name: &str) -> String {
+    name.to_lowercase()
+        .split_whitespace()
+        .map(alias)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Strips a trailing plural so "potatoes" and "potato" compare equal.
@@ -581,11 +676,20 @@ const NOT_A_PRODUCE_FORM: &[&str] = &[
 /// beetroot/beets) stay out of scope until the newsletter publishes names
 /// this misses.
 fn produce_matches(produce: &str, key: &str) -> bool {
+    // Alias expansion runs after singularisation and re-splits its result, so
+    // a multi-word canonical ("cilantro" -> "coriander", "kumera" -> "sweet
+    // potato") lands as separate head words and composes with the extension
+    // rule below rather than blocking it.
     let normalise = |s: &str| {
         s.to_lowercase()
             .split(|c: char| !c.is_alphanumeric())
             .filter(|w| !w.is_empty())
-            .map(|w| singular(w).to_string())
+            .flat_map(|w| {
+                alias(singular(w))
+                    .split(' ')
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>()
     };
     let (produce, key) = (normalise(produce), normalise(key));
@@ -1038,7 +1142,10 @@ fn parse_produce_line(answer: &str, label: &str) -> Vec<String> {
         .unwrap_or("")
         .trim_start_matches(':')
         .split(',')
-        .map(|s| s.trim().to_string())
+        // Canonicalised here so "kumera" is already "sweet potato" by the time
+        // it reaches the cache, the tiles and the detail pane — one rewrite at
+        // the entry point instead of one per render site.
+        .map(|s| canonical_produce(s.trim()))
         .filter(|s| !s.is_empty())
         .collect()
 }
@@ -1589,6 +1696,73 @@ fn seasonal_in_season() -> SeasonalInfo {
     }
 }
 
+/// One searchable spelling of an in-season produce name: the `term` to look
+/// for in newsletter prose, and the `canonical` name the tiles are keyed on.
+/// The two differ for an alias — ("kumera", "sweet potato") — which is the
+/// whole point: the article keeps the newsletter's own word while the link it
+/// carries resolves to the tile.
+#[derive(Serialize, PartialEq, Debug)]
+struct SearchTerm {
+    term: String,
+    canonical: String,
+}
+
+/// Every spelling worth hunting for in the market update's prose, for the
+/// produce that's actually in season — each canonical name plus any
+/// `PRODUCE_ALIASES` spelling that resolves to it.
+///
+/// **Sorted longest term first, and callers depend on that.** The frontend
+/// joins these into one regex alternation, which is first-match-wins, so the
+/// ordering is what stops "potato" claiming a "sweet potato" mention. It's
+/// the ordering rather than any separate rule, which is why the test pins it.
+///
+/// Built here rather than in JS so `PRODUCE_ALIASES` stays the single source
+/// of the vocabulary — the frontend does the scanning but never owns the
+/// synonyms. Out-of-season names are excluded: with no tile to activate, a
+/// link would go nowhere.
+#[tauri::command]
+fn produce_search_terms(fruit: Vec<String>, vegetable: Vec<String>) -> Vec<SearchTerm> {
+    let mut names: Vec<String> = fruit
+        .into_iter()
+        .chain(vegetable)
+        .chain(seasonal_produce(current_season()))
+        .map(|n| n.to_lowercase())
+        .collect();
+    names.sort();
+    names.dedup();
+
+    let mut terms: Vec<SearchTerm> = names
+        .iter()
+        .flat_map(|canonical| {
+            // The canonical name itself, plus every alias pointing at it.
+            // Aliases are stored single-word, so an alias for a multi-word
+            // canonical ("kumera" -> "sweet potato") is found by comparing
+            // against the whole canonical, not word by word.
+            std::iter::once(canonical.clone())
+                .chain(
+                    PRODUCE_ALIASES
+                        .iter()
+                        .filter(|(_, to)| *to == canonical.as_str())
+                        .map(|(from, _)| from.to_string()),
+                )
+                .map(|term| SearchTerm {
+                    term,
+                    canonical: canonical.clone(),
+                })
+        })
+        .collect();
+
+    // Longest first — see the ordering note above. Length ties break
+    // alphabetically so the output is stable rather than hash-ordered.
+    terms.sort_by(|a, b| {
+        b.term
+            .len()
+            .cmp(&a.term.len())
+            .then_with(|| a.term.cmp(&b.term))
+    });
+    terms
+}
+
 /// Fixes an unanalysed ingredient line by hand — the "Fix Now" queue.
 /// Clears every ingredient across the whole collection whose `display` is
 /// byte-identical to `display` (not just the one row the user was looking
@@ -1602,7 +1776,11 @@ fn set_ingredient_name(
     name: String,
     pantry: bool,
 ) -> Result<Vec<Recipe>, String> {
-    let name = name.trim().to_lowercase();
+    // Third and last entry point for an ingredient name (after the `key:` and
+    // index lines of an analysis), canonicalised on the same rule so a
+    // hand-typed "cilantro" can't reintroduce the split the queue exists to
+    // prevent.
+    let name = canonical_produce(name.trim());
     if name.is_empty() {
         return Err("Name can't be empty".to_string());
     }
@@ -2003,6 +2181,37 @@ mod tests {
         assert!(!winter.contains(&"asparagus".to_string())); // spring/summer only
     }
 
+    // US recipe vocabulary against AU feed/table vocabulary. Aliasing happens
+    // per word inside produce_matches' normalise, so it has to keep composing
+    // with the plural and trailing-extension rules rather than only matching
+    // bare names.
+    #[test]
+    fn aliases_bridge_us_and_au_produce_names() {
+        assert!(produce_matches("coriander", "cilantro"));
+        assert!(produce_matches("cilantro", "coriander"));
+        // Composes with plurals and the trailing-extension rule.
+        assert!(produce_matches("coriander", "cilantro leaves"));
+        // A multi-word canonical still lands as head words: the feed's
+        // "kumera" reaches a recipe's "sweet potato"...
+        assert!(produce_matches("kumera", "sweet potato"));
+        // ...without collapsing the leading-qualifier rule that keeps sweet
+        // potato and potato distinct.
+        assert!(!produce_matches("potato", "kumera"));
+    }
+
+    // Display side: a feed or recipe name is rewritten once, at the entry
+    // point, so nothing downstream has to translate.
+    #[test]
+    fn canonical_produce_rewrites_to_au_names() {
+        assert_eq!(canonical_produce("Kumera"), "sweet potato");
+        assert_eq!(canonical_produce("cilantro"), "coriander");
+        // Lowercased but NOT singularised — this name gets displayed, and
+        // `singular`'s crude rule would render "asparagus" as "asparagu".
+        // produce_matches bridges plurals at comparison time instead.
+        assert_eq!(canonical_produce("Asparagus"), "asparagus");
+        assert_eq!(canonical_produce("Cherry Tomatoes"), "cherry tomatoes");
+    }
+
     // The whole point of matching on word boundaries: a short produce name
     // must not match a longer unrelated ingredient that merely starts with
     // it. "corn" vs "corned beef" is the case that motivated the rule.
@@ -2042,11 +2251,64 @@ mod tests {
         assert!(!produce_matches("corn", "corn tortillas"));
     }
 
-    // Synonyms are out of scope for equality matching. Pinned so the
-    // limitation is visible rather than discovered as a silent miss.
+    // An alias must never point *away* from the seasonal table's vocabulary.
+    // Aliasing "eggplant" -> "aubergine" while SEASONAL_PRODUCE says
+    // "eggplant" meant every canonicalised name silently failed to match the
+    // table and lost its seasonal rating — no error, just a lower score. This
+    // catches the direction being written backwards, which is the easy
+    // mistake to make when adding a pair.
     #[test]
-    fn synonyms_do_not_match_without_an_alias_table() {
+    fn aliases_never_point_away_from_the_seasonal_table() {
+        for (from, to) in PRODUCE_ALIASES {
+            if SEASONAL_PRODUCE.iter().any(|(name, _)| name == from) {
+                panic!(
+                    "alias ({from:?} -> {to:?}) rewrites {from:?}, which is what \
+                     SEASONAL_PRODUCE calls it — the pair is backwards"
+                );
+            }
+        }
+    }
+
+    // The frontend joins these terms into one regex alternation, which is
+    // first-match-wins, so longest-first ordering is the only thing stopping
+    // "potato" from claiming a "sweet potato" mention. Pinned because that
+    // coupling is invisible from the JS side: get the order wrong and the
+    // article links the wrong tile with no error anywhere.
+    #[test]
+    fn search_terms_carry_aliases_and_sort_longest_first() {
+        let terms = produce_search_terms(vec![], vec!["sweet potato".into(), "coriander".into()]);
+
+        let by_len: Vec<usize> = terms.iter().map(|t| t.term.len()).collect();
+        let mut sorted = by_len.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        assert_eq!(by_len, sorted, "terms must be longest-first");
+
+        // An alias is searchable but resolves to the canonical tile name.
+        let kumera = terms.iter().find(|t| t.term == "kumera").expect("alias");
+        assert_eq!(kumera.canonical, "sweet potato");
+        let cilantro = terms.iter().find(|t| t.term == "cilantro").expect("alias");
+        assert_eq!(cilantro.canonical, "coriander");
+
+        // The canonical name is searchable as itself, too.
+        assert!(terms
+            .iter()
+            .any(|t| t.term == "sweet potato" && t.canonical == "sweet potato"));
+
+        // "sweet potato" must outrank the seasonal table's own "potato".
+        let pos = |term: &str| terms.iter().position(|t| t.term == term);
+        if let (Some(sweet), Some(plain)) = (pos("sweet potato"), pos("potato")) {
+            assert!(sweet < plain, "longer name must come first");
+        }
+    }
+
+    // Only synonyms listed in PRODUCE_ALIASES bridge — there's no general
+    // synonym rule, so a pair nobody has added stays unmatched. Pinned so the
+    // limitation is visible rather than discovered as a silent miss; the fix
+    // for any of these is one line in the table.
+    #[test]
+    fn synonyms_outside_the_alias_table_still_do_not_match() {
         assert!(!produce_matches("beetroot", "beets"));
+        // Two words, so the single-word alias table doesn't reach it.
         assert!(!produce_matches("capsicum", "bell pepper"));
     }
 
@@ -2284,6 +2546,7 @@ pub fn run() {
             list_recipes,
             list_archive,
             seasonal_in_season,
+            produce_search_terms,
             set_ingredient_name,
             set_excluded,
             cancel,

@@ -9,7 +9,7 @@ import { ContextMenu, useContextMenu } from "./components/ContextMenu.jsx";
 import { produceIcon } from "./components/icons.js";
 import { resolveOpen } from "./openCard.js";
 import { imageSrc } from "./imageSrc.js";
-import { recipesUsing } from "./recipesUsing.js";
+import { recipesUsing, produceType } from "./recipesUsing.js";
 import { checkForUpdate, installUpdate } from "./update.js";
 
 const { invoke } = window.__TAURI__.core;
@@ -148,6 +148,19 @@ export default function App() {
     if (!selectedProduce) return [];
     return recipesUsing(rankedRecipes, selectedProduce.name);
   }, [rankedRecipes, selectedProduce]);
+
+  // Selecting produce from a link in the market update, which carries only a
+  // canonical name — the tile object is recovered here so the pane gets the
+  // right icon type. An unmatched name still selects (produceIcon falls back
+  // to the vegetable mark), so a link can never do nothing when clicked.
+  //
+  // Closes the article for the same reason every other selection path does:
+  // the article *replaces* the detail pane, so the selection would otherwise
+  // be invisible until the reader closed it by hand.
+  function selectProduceByName(name) {
+    setShowArticle(false);
+    setSelection({ kind: "produce", item: { name, type: produceType(produce, name) } });
+  }
 
   async function runMatch() {
     try {
@@ -373,7 +386,12 @@ export default function App() {
               to the wrapper's full height via align-items: stretch. */}
           <div className="relative z-10 flex min-h-full flex-col">
             {showArticle ? (
-              <ArticleView title={feedTitle} html={feedHtml} />
+              <ArticleView
+                title={feedTitle}
+                html={feedHtml}
+                produce={produce}
+                onSelectProduce={selectProduceByName}
+              />
             ) : selectedProduce ? (
               <ProducePane
                 key={selectedProduce.name}
