@@ -435,6 +435,11 @@ fn build_produce_prompt(entry_title: &str, entry_text: &str) -> String {
         \"tomato\". Different produce that merely shares a category still stays\n\
         separate, though: orange, mandarin and lemon are three items, and\n\
         \"blood orange\" is its own item rather than \"orange\".\n\n\
+        Never output a category as an item. \"Citrus\", \"stone fruit\", \"berries\",\n\
+        \"greens\" and the like are groups, not something a shopper buys, so\n\
+        \"all the citrus is eating fantastically\" yields NO item of its own —\n\
+        list only the specific fruits named elsewhere in the post. Every item\n\
+        must be one specific produce, not a family of them.\n\n\
         Herbs count as vegetables. \"Pick of the week\" is the item the newsletter\n\
         names as its pick of the week — as its everyday name too, so a pick of\n\
         \"Dekopon mandarins\" is \"mandarin\". \"Featured\" lists items given particular\n\
