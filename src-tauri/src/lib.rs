@@ -427,8 +427,17 @@ fn build_produce_prompt(entry_title: &str, entry_text: &str) -> String {
         Vegetable: capsicum, corn, avocado\n\
         Pick of the week: apple\n\
         Featured: blueberry, corn\n\n\
+        Use the everyday name a shopper would put on a list, NOT a cultivar,\n\
+        variety or brand name. Collapse varieties to the produce they are: a\n\
+        newsletter naming \"Murcotts\", \"Afourers\" and \"Dekopon mandarins\"\n\
+        yields ONE item, \"mandarin\" — not three. Likewise \"Pink Lady\" and\n\
+        \"Granny Smith\" are both \"apple\", \"Kipfler\" is \"potato\", \"Roma\" is\n\
+        \"tomato\". Different produce that merely shares a category still stays\n\
+        separate, though: orange, mandarin and lemon are three items, and\n\
+        \"blood orange\" is its own item rather than \"orange\".\n\n\
         Herbs count as vegetables. \"Pick of the week\" is the item the newsletter\n\
-        names as its pick of the week. \"Featured\" lists items given particular\n\
+        names as its pick of the week — as its everyday name too, so a pick of\n\
+        \"Dekopon mandarins\" is \"mandarin\". \"Featured\" lists items given particular\n\
         emphasis (called out as excellent quality or value right now). Every pick\n\
         or featured item must also appear, spelled identically, in the Fruit or\n\
         Vegetable line. Omit a line entirely if it has no items."
