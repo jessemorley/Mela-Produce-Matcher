@@ -52,18 +52,46 @@ the user verifies UI/UX changes visually themselves in the running
 ## Releasing and auto-update
 
 The app updates itself via `tauri-plugin-updater`, checking GitHub Releases
-on launch. Shipping a version is: bump `version` in **both** `package.json`
-and `src-tauri/tauri.conf.json` (they're read independently — the updater
-compares against the `tauri.conf.json` one), then tag and push:
+on launch. Shipping a version means bumping it in **three** files —
+`package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` —
+then tagging and pushing:
 
-    npm version 0.3.0 && git push --follow-tags
+    npm version 0.3.0 --no-git-tag-version   # package.json only
+    # then edit tauri.conf.json + Cargo.toml by hand to match
+    git commit -am "Bump version to 0.3.0" && git tag v0.3.0
+    git push origin main && git push origin v0.3.0
 
-That fires `.github/workflows/release.yml`, which builds a universal macOS
-bundle and attaches the signed artifacts plus `latest.json` — the manifest
-the updater actually reads — to a **draft** release. Drafts don't count as
-"latest" on GitHub, so `releases/latest/download/latest.json` 404s and no
-client sees the update until the draft is published by hand. That's the
-intended gate (write release notes, then ship), not a bug to fix.
+`npm version` alone is **not** enough: it only rewrites `package.json`, and
+the updater compares the running app against `tauri.conf.json`'s version, so
+a mismatch ships a build that never offers itself as an update. Run `cargo
+check` after editing `Cargo.toml` so `Cargo.lock` picks the bump up too,
+otherwise the release commit leaves the lockfile dirty.
+
+That fires `.github/workflows/release.yml`, which builds an **Apple Silicon
+only** bundle (see below) and attaches the signed artifacts plus
+`latest.json` — the manifest the updater actually reads — to a **draft**
+release. Drafts don't count as "latest" on GitHub, so
+`releases/latest/download/latest.json` 404s and no client sees the update
+until the draft is published by hand (`gh release edit vX.Y.Z
+--draft=false`). That's the intended gate (write release notes, then ship),
+not a bug to fix.
+
+**aarch64 only, deliberately.** The workflow passes no `--target`, so it
+builds for whatever `macos-latest` natively is. A `--target
+universal-apple-darwin` build was tried and reverted: it doubled the binary
+(13MB → 33MB, DMG 5.6MB → 11.5MB) to carry Intel code for an app that only
+runs on macOS anyway, and the updater re-downloads that on every release.
+The tradeoff is that Intel Macs can't run it at all — and since `latest.json`
+then carries no `darwin-x86_64` entry, an Intel install sees *no update*
+rather than a confusing failure. To reverse: add `x86_64-apple-darwin` back
+to the `dtolnay/rust-toolchain` targets and `args: --target
+universal-apple-darwin` to the `tauri-action` step.
+
+**Re-cutting a tag.** The workflow won't overwrite an existing release, so
+re-releasing the same version needs the draft *and* its tag gone first:
+`gh release delete vX.Y.Z --yes --cleanup-tag`, then re-tag and push. Safe
+only while the release is still a draft — once published, clients may have
+already fetched that `latest.json`, so bump to a new version instead.
 
 One secret has to exist on the repo or the workflow produces unsigned
 bundles that every client silently rejects: `TAURI_SIGNING_PRIVATE_KEY`, the
@@ -81,6 +109,14 @@ security model, since **the app is only ad-hoc signed** (`signingIdentity:
 vouching for anything. Losing `~/.tauri/sprout.key` means no existing
 install can ever be updated again — a new keypair only works for installs
 that already shipped with the new pubkey.
+
+Because the app isn't notarized (the user declined a Developer ID account —
+see the `macos-tcc-appdata-prompt` note for why), a **fresh DMG install**
+still gets Gatekeeper's unidentified-developer warning and needs a
+right-click → Open. In-place *updates* don't re-trigger that, since the
+already-running app installs them itself rather than going through
+Gatekeeper's first-launch quarantine check. So the warning is a
+first-install cost only, not a per-release one.
 
 `bundle.createUpdaterArtifacts: true` is what emits the `.app.tar.gz` +
 `.sig` pair the updater consumes. Note this is the **v2** spelling — v1's
