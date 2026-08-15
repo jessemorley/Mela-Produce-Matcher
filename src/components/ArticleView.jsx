@@ -56,10 +56,20 @@ function linkProduceMentions(doc, terms) {
     re.lastIndex = 0;
   }
 
+  // First mention of each produce only — a produce newsletter names its items
+  // constantly, and linking all of them turns the prose into a field of
+  // green. Keyed on the canonical, so "kumera" and a later "sweet potato"
+  // count as the same item and only the first one links. Spans the whole
+  // article rather than per-paragraph, which is why it lives out here.
+  const linked = new Set();
+
   for (const node of targets) {
     const frag = doc.createDocumentFragment();
     let last = 0;
     for (const m of node.data.matchAll(re)) {
+      const name = canonical.get(m[1].toLowerCase()) ?? m[1].toLowerCase();
+      if (linked.has(name)) continue;
+      linked.add(name);
       frag.append(node.data.slice(last, m.index));
       const link = doc.createElement("a");
       link.className = "produce-link";
@@ -67,7 +77,7 @@ function linkProduceMentions(doc, terms) {
       // the bare term the canonical map is keyed on ("kumera"). The link
       // *shows* m[0] so the newsletter's own words are untouched, and
       // *carries* the canonical tile name.
-      link.setAttribute("data-produce", canonical.get(m[1].toLowerCase()) ?? m[1].toLowerCase());
+      link.setAttribute("data-produce", name);
       link.textContent = m[0];
       frag.append(link);
       last = m.index + m[0].length;
@@ -332,17 +342,16 @@ export default function ArticleView({ title, html, produce, onSelectProduce }) {
           text-decoration: none;
           border-bottom: 1px solid color-mix(in oklab, var(--color-match) 35%, transparent);
         }
-        /* An in-app jump, not an outbound link: same green, but a dotted
-           underline and a pointer cursor rather than the solid rule the
-           newsletter's own links get. Overrides the rule above, which matches
-           every <a> including these. */
+        /* An in-app jump, not an outbound link: carried by colour alone. The
+           rule above gives every <a> a bottom border, so this has to clear it
+           explicitly — mentions are frequent enough in a produce newsletter
+           that underlining them all stripes the prose. */
         .prose-newsletter a.produce-link {
           cursor: pointer;
-          border-bottom: 1px dotted color-mix(in oklab, var(--color-match) 55%, transparent);
+          border-bottom: none;
         }
         .prose-newsletter a.produce-link:hover {
           color: var(--color-text);
-          border-bottom-color: color-mix(in oklab, var(--color-match) 90%, transparent);
         }
         .prose-newsletter img { max-width: 100%; border-radius: 12px; }
         .prose-newsletter b, .prose-newsletter strong { color: var(--color-text); font-weight: 600; }
